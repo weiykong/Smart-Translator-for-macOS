@@ -5,25 +5,23 @@ This creates a standalone app that can be installed in the Applications folder.
 
 from setuptools import setup
 
-APP = ['smart_translator_dynamic.py']  # Your main script filename
+APP = ['smart_translator_dynamic.py']
 DATA_FILES = []
 OPTIONS = {
-    'argv_emulation': True,
-    'packages': ['rumps', 'requests'],
+    'argv_emulation': False,
+    'packages': ['rumps', 'requests', 'pyperclip'],
     'plist': {
-        'LSUIElement': True,  # This hides the dock icon
+        'LSUIElement': True,
         'CFBundleName': 'SmartTranslator',
         'CFBundleDisplayName': 'Smart Translator',
-        'CFBundleIdentifier': 'com.yourusername.smarttranslator',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0.0',
-        'NSHumanReadableCopyright': 'Copyright © 2025 Your Name',
-        'NSUserNotificationAlertStyle': 'alert',  # Enable notifications
-        'NSSupportsAutomaticTermination': False,  # Prevent auto-termination
-        'LSBackgroundOnly': False,  # Allow notifications
+        'CFBundleIdentifier': 'com.smarttranslator.app',
+        'CFBundleVersion': '1.1.0',
+        'CFBundleShortVersionString': '1.1.0',
+        'NSHumanReadableCopyright': 'Copyright © 2026',
+        'NSUserNotificationAlertStyle': 'alert',
     },
-    'iconfile': 'icon.icns',  # Optional: path to your .icns icon file
-    'includes': ['pyperclip', 'collections', 'json', 'os', 'datetime'],  # Ensure all dependencies
+    'iconfile': 'icon.icns',
+    'includes': ['json', 'os', 'datetime', 'threading', 'logging'],
 }
 
 setup(

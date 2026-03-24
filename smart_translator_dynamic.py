@@ -4,338 +4,311 @@ import pyperclip
 from collections import deque
 import json
 import os
+import threading
+import logging
 from datetime import datetime
+
+# Setup Logging
+LOG_DIR = os.path.expanduser("~/Library/Logs/SmartTranslator")
+os.makedirs(LOG_DIR, exist_ok=True)
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, "app.log"),
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+class OllamaClient:
+    """Handles all interactions with the Ollama API"""
+    def __init__(self, base_url):
+        self.base_url = base_url
+
+    def check_connection(self):
+        try:
+            requests.get(self.base_url, timeout=2)
+            return True
+        except Exception:
+            return False
+
+    def fetch_models(self):
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            response.raise_for_status()
+            return [model["name"] for model in response.json().get("models", [])]
+        except Exception as e:
+            logging.error(f"Failed to fetch models: {e}")
+            return []
+
+    def generate(self, model, prompt):
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+                timeout=120
+            )
+            response.raise_for_status()
+            return response.json().get("response", "").strip()
+        except Exception as e:
+            logging.error(f"Generation failed: {e}")
+            raise e
 
 class SmartTranslatorApp(rumps.App):
     def __init__(self):
-        super().__init__("🌍 Translator")
-        self.clipboard_history = deque(maxlen=5)
-        self.model = None
-        self.available_models = []
+        super().__init__("🌍 Translator", quit_button=None)
+        self.clipboard_history = deque(maxlen=10)
+        self.is_processing = False
+        
+        # Paths
+        self.app_support_dir = os.path.expanduser("~/Library/Application Support/SmartTranslator/")
+        self.models_file = os.path.join(self.app_support_dir, "models.json")
+        self.config_file = os.path.join(self.app_support_dir, "config.json")
+        
+        os.makedirs(self.app_support_dir, exist_ok=True)
+        
+        # State
+        self.config = self.load_config()
+        self.client = OllamaClient(self.config['ollama_url'])
+        self.available_models, self.model = self.load_models()
         self.online = False
-        self.models_file = os.path.expanduser("~/Library/Application Support/SmartTranslator/models.json")
-        self.ensure_config_directory()
-        self.load_models_from_file()
+        
         self.setup_menu()
-        self.check_connection()
+        self.start_connection_poll()
+        logging.info("App initialized")
 
-    def ensure_config_directory(self):
-        """Ensure the configuration directory exists"""
-        config_dir = os.path.dirname(self.models_file)
-        os.makedirs(config_dir, exist_ok=True)
+    def load_config(self):
+        default_config = {
+            "ollama_url": "http://localhost:11434",
+            "targets": [
+                {"name": "Chinese", "emoji": "🇨🇳"},
+                {"name": "French", "emoji": "🇫🇷"},
+                {"name": "English", "emoji": "🇺🇸"}
+            ],
+            "prompts": {
+                "correct": "You're a language enhancer expert. Enhance and correct input text while preserving its language. Return ONLY the corrected text.\n\nText:\n{text}",
+                "translate": "You're a translator expert. Accurate, preserve formatting. Return ONLY the translated text to {action}.\n\nText:\n{text}"
+            }
+        }
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    for k, v in default_config.items():
+                        if k not in config: config[k] = v
+                    return config
+            except Exception as e:
+                logging.error(f"Config load error: {e}")
+        return default_config
 
-    def load_models_from_file(self):
-        """Load models list from JSON file"""
+    def save_config(self):
         try:
-            if os.path.exists(self.models_file):
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config, f, indent=2)
+            self.setup_menu()
+        except Exception as e:
+            logging.error(f"Config save error: {e}")
+
+    def load_models(self):
+        available = []
+        current = None
+        if os.path.exists(self.models_file):
+            try:
                 with open(self.models_file, 'r') as f:
                     data = json.load(f)
-                    self.available_models = data.get("models", [])
-                    self.model = data.get("default_model")
-                    
-                    # If default model is not in available models, use the first one
-                    if self.model not in self.available_models and self.available_models:
-                        self.model = self.available_models[0]
-                        
-                print(f"Loaded {len(self.available_models)} models from file")
-                
-                # Show notification for loaded models
-                if self.available_models:
-                    model_name = self.model.split(':')[0] if ':' in self.model else self.model
-                    rumps.notification("Models Loaded", f"📚 {len(self.available_models)} models", f"Default: {model_name}")
-                        
-            else:
-                # If no file exists, try to fetch from API and create the file
-                print("No models file found, fetching from API...")
-                self.fetch_and_save_models()
-                
-        except Exception as e:
-            print(f"Error loading models from file: {e}")
-            self.available_models = []
-            self.model = None
+                    available = data.get("models", [])
+                    current = data.get("default_model")
+            except Exception as e:
+                logging.error(f"Models load error: {e}")
+        
+        if not current and available:
+            current = available[0]
+        return available, current
 
-    def save_models_to_file(self):
-        """Save current models list to JSON file"""
+    def save_models(self):
         try:
-            data = {
-                "models": self.available_models,
-                "default_model": self.model,
-                "last_updated": datetime.now().isoformat()
-            }
-            
             with open(self.models_file, 'w') as f:
-                json.dump(data, f, indent=2)
-                
-            print(f"Saved {len(self.available_models)} models to file")
-            
+                json.dump({
+                    "models": self.available_models,
+                    "default_model": self.model,
+                    "last_updated": datetime.now().isoformat()
+                }, f, indent=2)
         except Exception as e:
-            print(f"Error saving models to file: {e}")
-
-    def fetch_and_save_models(self):
-        """Fetch models from Ollama API and save to file"""
-        try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=5)
-            response.raise_for_status()
-            
-            data = response.json()
-            if "models" in data:
-                self.available_models = [model["name"] for model in data["models"]]
-                
-                # Set default model if none selected
-                if not self.model and self.available_models:
-                    self.model = self.available_models[0]
-                
-                # Save to file
-                self.save_models_to_file()
-                print(f"Fetched and saved {len(self.available_models)} models")
-                
-            else:
-                print("No models found in API response")
-                
-        except Exception as e:
-            print(f"Error fetching models from API: {e}")
+            logging.error(f"Models save error: {e}")
 
     def setup_menu(self):
-        """Setup the complete menu structure"""
         self.menu.clear()
-        
-        # Add main function items
-        self.menu.add(rumps.MenuItem("Correct Clipboard", callback=self.correct_clipboard))
-        self.menu.add(rumps.separator)
-        self.menu.add(rumps.MenuItem("Translate to Chinese", callback=self.translate_to_chinese))
-        self.menu.add(rumps.MenuItem("Translate to French", callback=self.translate_to_french))
-        self.menu.add(rumps.MenuItem("Translate to English", callback=self.translate_to_english))
+        self.menu.add(rumps.MenuItem("Correct Clipboard", callback=self.on_action))
         self.menu.add(rumps.separator)
         
-        # Add models submenu
+        for target in self.config.get("targets", []):
+            self.menu.add(rumps.MenuItem(f"Translate to {target['name']}", callback=self.on_action))
+            
+        self.menu.add(rumps.separator)
         self.add_models_submenu()
         
-        # Add remaining items
+        settings = rumps.MenuItem("Settings")
+        settings.add(rumps.MenuItem("Change Ollama URL", callback=self.change_url))
+        
+        # Language Management
+        lang_menu = rumps.MenuItem("Manage Languages")
+        lang_menu.add(rumps.MenuItem("Add Language...", callback=self.add_language))
+        if self.config.get("targets"):
+            lang_menu.add(rumps.separator)
+            for t in self.config["targets"]:
+                def make_remove_cb(name):
+                    return lambda _: self.remove_language(name)
+                lang_menu.add(rumps.MenuItem(f"Remove {t['name']}", callback=make_remove_cb(t['name'])))
+        settings.add(lang_menu)
+        
+        settings.add(rumps.separator)
+        settings.add(rumps.MenuItem("Edit Config File", callback=lambda _: os.system(f"open -e '{self.config_file}'")))
+        settings.add(rumps.MenuItem("Open Logs", callback=lambda _: os.system(f"open {LOG_DIR}")))
+        settings.add(rumps.MenuItem("Open Config Folder", callback=lambda _: os.system(f"open '{self.app_support_dir}'")))
+        self.menu.add(settings)
+        
+        self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("Undo Last", callback=self.undo_last))
+        self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
+
+    def add_language(self, _):
+        window = rumps.Window(
+            message="Enter language name (e.g. Japanese, Spanish)",
+            title="Add Language",
+            default_text="",
+            ok="Next",
+            cancel="Cancel"
+        )
+        res = window.run()
+        if res.clicked and res.text.strip():
+            lang_name = res.text.strip()
+            
+            emoji_window = rumps.Window(
+                message=f"Enter emoji for {lang_name} (optional)",
+                title="Language Emoji",
+                default_text="🌐",
+                ok="Add",
+                cancel="Cancel"
+            )
+            e_res = emoji_window.run()
+            if e_res.clicked:
+                emoji = e_res.text.strip() or "🌐"
+                self.config["targets"].append({"name": lang_name, "emoji": emoji})
+                self.save_config()
+                rumps.notification("Success", f"Added {lang_name}", "")
+
+    def remove_language(self, name):
+        self.config["targets"] = [t for t in self.config["targets"] if t['name'] != name]
+        self.save_config()
+        rumps.notification("Success", f"Removed {name}", "")
 
     def add_models_submenu(self):
-        """Add the models submenu to the menu"""
+        short = self.model.split(':')[0] if self.model else "None"
+        models_menu = rumps.MenuItem(f"Model: {short}")
         if self.available_models:
-            # Create models submenu
-            if self.model:
-                short_name = self.model.split(':')[0] if ':' in self.model else self.model
-                models_menu = rumps.MenuItem(f"Model: {short_name}")
-            else:
-                models_menu = rumps.MenuItem("Models (none selected)")
-            
-            # Add model options
-            for model_name in self.available_models:
-                callback = self.create_model_callback(model_name)
-                item_title = f"● {model_name}" if model_name == self.model else f"  {model_name}"
-                models_menu.add(rumps.MenuItem(item_title, callback=callback))
-            
-            # Add separator and refresh option
-            models_menu.add(rumps.separator)
-            models_menu.add(rumps.MenuItem("↻ Refresh from API", callback=self.refresh_models))
-            
+            for m in self.available_models:
+                def make_callback(name):
+                    return lambda _: self.select_model(name)
+                item_title = f"● {m}" if m == self.model else f"  {m}"
+                models_menu.add(rumps.MenuItem(item_title, callback=make_callback(m)))
         else:
-            # No models available
-            models_menu = rumps.MenuItem("Models (empty)")
-            models_menu.add(rumps.MenuItem("No models found", callback=None))
-            models_menu.add(rumps.separator)
-            models_menu.add(rumps.MenuItem("↻ Refresh from API", callback=self.refresh_models))
+            models_menu.add(rumps.MenuItem("No models found"))
         
+        models_menu.add(rumps.separator)
+        models_menu.add(rumps.MenuItem("↻ Refresh Models", callback=self.refresh_models))
         self.menu.add(models_menu)
-        self.menu.add(rumps.separator)
 
-    def check_connection(self):
-        """Check Ollama connection status"""
-        try:
-            requests.get("http://localhost:11434", timeout=2)
-            self.online = True
-            self.title = "🌍 Translator"
-        except Exception:
-            self.online = False
-            self.title = "❌ Offline"
-            
-        self.update_menu_state()
+    def start_connection_poll(self):
+        def poll():
+            while True:
+                self.online = self.client.check_connection()
+                if not self.is_processing:
+                    self.title = "🌍 Translator" if self.online else "❌ Offline"
+                self.update_menu_state()
+                threading.Event().wait(10)
+        threading.Thread(target=poll, daemon=True).start()
 
     def update_menu_state(self):
-        """Update menu based on connection status and available models"""
-        # Update main function menu items based on status
-        translate_methods = [
-            ("Correct Clipboard", self.correct_clipboard),
-            ("Translate to Chinese", self.translate_to_chinese),
-            ("Translate to French", self.translate_to_french),
-            ("Translate to English", self.translate_to_english)
-        ]
-        
-        for item_name, method in translate_methods:
-            try:
-                menu_item = self.menu[item_name]
-                if self.available_models and self.model:
-                    menu_item.set_callback(method)
-                else:
-                    menu_item.set_callback(None)
-            except KeyError:
-                continue
+        clickable = self.online and self.available_models and self.model
+        for k in self.menu.keys():
+            if k == "Correct Clipboard" or k.startswith("Translate to"):
+                self.menu[k].set_callback(self.on_action if clickable else None)
 
-    def create_model_callback(self, model_name):
-        """Create a callback function for model selection"""
-        def callback(_):
-            self.select_model(model_name)
-        return callback
-
-    def select_model(self, model_name):
-        """Select a specific model and save to file"""
-        old_model = self.model
-        self.model = model_name
-        self.save_models_to_file()  # Save the new default
-        self.setup_menu()  # Rebuild menu to show updated selection
-        
-        # Show notification with model change info
-        if old_model != model_name:
-            short_name = model_name.split(':')[0] if ':' in model_name else model_name
-            rumps.notification("Model Loaded", f"✅ {short_name}", f"Ready to use {model_name}")
-        else:
-            rumps.notification("Model Selected", "", f"Using: {model_name}")
+    def select_model(self, name):
+        self.model = name
+        self.save_models()
+        self.setup_menu()
+        rumps.notification("Model Changed", "", f"Using {name}")
 
     def refresh_models(self, _):
-        """Manually refresh the list of available models from API"""
-        self.title = "⏳ Refreshing..."
-        
-        try:
-            # Check connection first
-            requests.get("http://localhost:11434", timeout=2)
-            self.online = True
-            
-            # Fetch and save new models
-            old_count = len(self.available_models)
-            self.fetch_and_save_models()
-            self.setup_menu()  # Rebuild menu with new models
-            
-            new_count = len(self.available_models)
-            if new_count != old_count:
-                rumps.notification("Models Updated", f"🔄 Found {new_count} models", f"Changed from {old_count} models")
+        def task():
+            self.title = "⏳ Refreshing..."
+            models = self.client.fetch_models()
+            if models:
+                self.available_models = models
+                if not self.model: self.model = models[0]
+                self.save_models()
+                self.setup_menu()
+                rumps.notification("Refreshed", f"Found {len(models)} models", "")
             else:
-                rumps.notification("Models Refreshed", f"✅ {new_count} models", "No changes detected")
-                
-        except Exception:
-            self.online = False
-            rumps.notification("Refresh Failed", "❌ Connection error", "Ollama is not accessible")
-        finally:
+                rumps.notification("Error", "No models found", "Check Ollama connection")
             self.title = "🌍 Translator" if self.online else "❌ Offline"
+        threading.Thread(target=task, daemon=True).start()
 
-    def translate_to_chinese(self, _):
-        self.process_and_update("Chinese")
-    
-    def translate_to_french(self, _):
-        self.process_and_update("French")
-    
-    def translate_to_english(self, _):
-        self.process_and_update("English")
+    def on_action(self, sender):
+        if self.is_processing: return
+        action = "correct" if sender.title == "Correct Clipboard" else sender.title.replace("Translate to ", "")
+        threading.Thread(target=self.process_task, args=(action,), daemon=True).start()
 
-    def process_text(self, text, action):
-        """Process text using the selected model"""
-        if not self.model:
-            return "Error: No model selected"
-            
+    def process_task(self, action):
+        self.is_processing = True
         self.title = "⏳ Processing..."
         try:
-            prompt = self.build_prompt(text, action)
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False
-                },
-                timeout=30
-            )
-            response.raise_for_status()
+            text = pyperclip.paste().strip()
+            if not text:
+                rumps.notification("Clipboard Empty", "", "Copy some text first")
+                return
+
+            logging.info(f"Processing action: {action}")
+            prompt_template = self.config['prompts']['correct'] if action == "correct" else self.config['prompts']['translate']
+            prompt = prompt_template.format(text=text, action=action)
             
-            result = response.json()
-            if "response" in result:
-                return result["response"].strip()
-            else:
-                return f"Error: Unexpected response format: {result}"
+            result = self.client.generate(self.model, prompt)
+            if result:
+                pyperclip.copy(result)
+                self.clipboard_history.append(result)
                 
-        except json.JSONDecodeError as e:
-            return f"JSON Error: {str(e)}"
+                emoji = "✏️"
+                for t in self.config.get("targets", []):
+                    if t['name'] == action: emoji = t['emoji']; break
+                
+                preview = result[:50] + "..." if len(result) > 50 else result
+                rumps.notification("Success", f"{emoji} {action} complete", preview)
+            else:
+                rumps.notification("Error", "Empty result", "")
         except Exception as e:
-            return f"Error: {str(e)}"
+            logging.error(f"Task failed: {e}")
+            rumps.notification("Error", "Action failed", str(e))
         finally:
+            self.is_processing = False
             self.title = "🌍 Translator" if self.online else "❌ Offline"
 
-    def build_prompt(self, text, action):
-        """Build prompt for the LLM based on the action"""
-        if action == "correct":
-            return f"""You're a language enhancer expert. 
-        Your role is to enhance and correct input text while preserving its language:
-        1. Fix spelling/grammar
-        2. Improve clarity
-        3. Keep original formatting
-        Return ONLY the corrected text without any explanations or commentary.
-        Keep the original line breaks, spacing, and formatting.
-        Keep the original text in the same language (English or French).
-        Keep the tone and style of the original text.
-        Now, correct this text:
-
-Text:
-{text}"""
-        else:
-            return f"""You're a translator expert. 
-        - Accurate: Maintain the exact meaning of the original text
-        - Save 原样: Preserve all original formatting, spacing, and special characters
-        - Return ONLY the translated text without any explanations or commentary
-        Now, translate this text to {action}:
-
-Text:
-{text}"""
-
-    def correct_clipboard(self, _):
-        self.process_and_update("correct")
-
-    def process_and_update(self, action):
-        """Process clipboard content and update it with the result"""
-        original = pyperclip.paste().strip()
-        if not original:
-            rumps.notification("Error", "", "Clipboard is empty")
-            return
-        
-        if not self.model:
-            rumps.notification("Error", "", "No model selected")
-            return
-        
-        # Show processing started notification
-        short_model = self.model.split(':')[0] if ':' in self.model else self.model
-        rumps.notification("Processing...", f"📝 {action}", f"Using {short_model}")
-        
-        processed = self.process_text(original, action)
-        if processed and not processed.startswith("Error"):
-            pyperclip.copy(processed)
-            self.clipboard_history.append(processed)
-            
-            # Show completion notification with preview
-            preview = processed[:50] + "..." if len(processed) > 50 else processed
-            action_emoji = {"correct": "✏️", "Chinese": "🇨🇳", "French": "🇫🇷", "English": "🇺🇸"}.get(action, "✅")
-            rumps.notification("Completed!", f"{action_emoji} {action} finished", preview)
-        else:
-            rumps.notification("Error", f"❌ {action} failed", processed)
-
-    def quit_app(self, _):
-        """Quit the application"""
-        rumps.notification("Smart Translator", "👋 Goodbye!", "Application closing...")
-        rumps.quit_application()
+    def change_url(self, _):
+        win = rumps.Window("Enter Ollama URL", "Settings", default_text=self.config['ollama_url'], ok="Save", cancel="Cancel")
+        res = win.run()
+        if res.clicked:
+            self.config['ollama_url'] = res.text.strip()
+            self.client.base_url = self.config['ollama_url']
+            self.save_config()
+            rumps.notification("Settings", "URL Updated", self.config['ollama_url'])
 
     def undo_last(self, _):
-        """Undo last clipboard operation"""
         if len(self.clipboard_history) > 1:
-            self.clipboard_history.pop()  # Remove current
-            previous = self.clipboard_history[-1]  # Get the previous one
-            pyperclip.copy(previous)
-            preview = previous[:40] + "..." if len(previous) > 40 else previous
-            rumps.notification("Undone", "↩️ Restored previous", preview)
+            self.clipboard_history.pop()
+            prev = self.clipboard_history[-1]
+            pyperclip.copy(prev)
+            rumps.notification("Undone", "Restored previous clipboard", prev[:40] + "...")
         else:
-            rumps.notification("Undo", "⚠️ Nothing to undo", "No previous versions available")
+            rumps.notification("Undo", "Nothing to undo", "")
 
 if __name__ == "__main__":
-    # Set LSUIElement to hide dock icon - must be done before app initialization
     import AppKit
     info = AppKit.NSBundle.mainBundle().infoDictionary()
     info["LSUIElement"] = "1"
