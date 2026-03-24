@@ -1,86 +1,72 @@
-# 🌍 Smart Translator for macOS
+# 🌍 Smart Translator for macOS (v1.1.0)
 
-A lightweight, privacy-focused macOS menu bar application that uses local LLMs (via Ollama) to translate and correct text directly from your clipboard.
+A high-performance, privacy-focused macOS menu bar application that leverages local LLMs (via [Ollama](https://ollama.com)) to provide instant text correction and translation directly through your clipboard.
 
-## ✨ Features
+## ✨ Key Features
 
-* **Clipboard Integration:** Instantly process text currently in your clipboard without opening a new window.
-* **Local Privacy:** All processing happens locally on your machine using Ollama. No data is sent to the cloud.
-* **Smart Modes:**
-    * **Correct Clipboard:** Fixes grammar, spelling, and clarity while preserving original formatting.
-    * **Translation:** Supports translation to Chinese, French, and English.
-* **Dynamic Model Switching:** Automatically detects models installed in Ollama (e.g., Llama 3.2, Mistral, DeepSeek) and allows you to switch between them on the fly.
-* **Undo Capability:** Accidentally overwrote your clipboard? Quickly undo the last operation.
-* **Native Experience:** distinct menu bar icon, system notifications, and native macOS build.
+*   **⚡ Asynchronous Engine:** Non-blocking UI ensures your menu bar stays responsive while the LLM processes text in the background.
+*   **🛠️ Dynamic Configuration:** Fully customizable translation targets, emojis, and system prompts via a built-in Settings menu.
+*   **🌐 Manage Languages:** Add or remove translation languages (e.g., Japanese, Spanish, German) directly from the app interface.
+*   **✏️ Smart Correction:** Enhances grammar, spelling, and clarity while strictly preserving your original formatting and line breaks.
+*   **🔄 History & Undo:** Maintains a clipboard history (up to 10 items), allowing you to quickly revert any accidental overwrites.
+*   **🔒 Privacy First:** 100% local processing. Your data never leaves your machine.
+*   **📝 Professional Logging:** Built-in logging system (`~/Library/Logs/SmartTranslator/`) for easy troubleshooting and status monitoring.
 
 ## 🛠️ Prerequisites
 
-1.  **macOS** (Silicon or Intel)
+1.  **macOS** (Apple Silicon or Intel).
 2.  **Ollama** must be installed and running.
-    * Download from [ollama.com](https://ollama.com)
-    * Ensure the server is running (`ollama serve`).
-3.  **Models:** You need at least one model pulled. For example:
+    *   Download from [ollama.com](https://ollama.com)
+    *   Ensure the server is running (`ollama serve`).
+3.  **Local Models:** Pull at least one model to get started:
     ```bash
-    ollama pull llama3.2
-    ollama pull mistral
+    ollama pull llama3.2  # Recommended for speed
+    ollama pull mistral   # Recommended for quality
     ```
 
-## 🚀 Installation
+## 🚀 Installation & Setup
 
-### Option 1: Build the App (Recommended)
+### Recommended: Build as a macOS App
+Building the app creates a standalone `.app` bundle in your `/Applications` folder.
 
-This allows you to install it as a proper Application in your `/Applications` folder.
-
-1.  Clone this repository.
-2.  Make the build script executable:
+1.  **Clone the Repository**
+2.  **Run the Build Script:**
     ```bash
     chmod +x build_script.sh
-    ```
-3.  Run the build script:
-    ```bash
     ./build_script.sh
     ```
-    *This script will clean previous builds, package the app using `py2app`, and move it to your Applications folder.*
+3.  **Grant Permissions:**
+    *   **Accessibility:** Required for the app to read/write to your clipboard.
+    *   **Notifications:** Required for the app to provide status updates on completion.
 
-4.  **Important Permissions:**
-    Upon first launch, you must grant the app permissions to modify your clipboard:
-    * Open **System Preferences** > **Security & Privacy** > **Privacy**.
-    * Add **Smart Translator** to **Accessibility**.
-    * Allow **Notifications** when prompted.
+### Alternative: Run from Source
+```bash
+pip install rumps requests pyperclip py2app
+python3 smart_translator_dynamic.py
+```
 
-### Option 2: Run from Source
+## ⚙️ Advanced Configuration
 
-If you want to develop or test without building:
+Smart Translator v1.1.0 introduces a robust configuration system located in:
+`~/Library/Application Support/SmartTranslator/config.json`
 
-1.  Install dependencies:
-    ```bash
-    pip install rumps requests pyperclip py2app
-    ```
-2.  Run the script:
-    ```bash
-    python3 smart_translator_dynamic.py
-    ```
-
-## ⚙️ Configuration
-
-The app automatically manages configuration in `~/Library/Application Support/SmartTranslator/models.json`.
-
-* **Refresh Models:** Click "Refresh from API" in the menu to sync with your current Ollama models.
-* **Manual Config:** You can also run the included helper script to generate a config file manually:
-    ```bash
-    python3 generate_models_json.py
-    ```
+*   **Change Ollama URL:** Connect to a remote Ollama instance by updating the URL in **Settings**.
+*   **Custom Prompts:** Fine-tune how the AI behaves by editing the prompt templates in the config file.
+*   **Language List:** Add your own languages with custom emojis via the **Manage Languages** menu.
 
 ## 🖥️ Usage
 
-1.  **Copy** any text you want to process.
+1.  **Copy** text to your clipboard.
 2.  Click the **🌍 icon** in your menu bar.
-3.  Select an action (e.g., "Correct Clipboard" or "Translate to French").
-4.  Wait for the notification confirming completion.
-5.  **Paste** the result—your clipboard has been automatically updated!
+3.  Choose an action: **Correct Clipboard** or **Translate to [Language]**.
+4.  Wait for the **Success Notification**.
+5.  **Paste** your improved or translated text!
 
 ## 🔧 Troubleshooting
 
-* **"Offline" Status:** Ensure Ollama is running (`ollama serve`) and accessible at `localhost:11434`.
-* **Installation Failed:** If the build script fails, ensure you have `py2app` installed (`pip install py2app`).
-* **Clipboard not changing:** Verify that you have granted Accessibility permissions in System Settings.
+*   **"Offline" Status:** Verify Ollama is running and accessible at the configured URL (default: `http://localhost:11434`).
+*   **UI Not Updating:** Check the logs via **Settings > Open Logs** to see real-time errors or API timeouts.
+*   **Permission Errors:** Ensure "Smart Translator" is checked in *System Settings > Privacy & Security > Accessibility*.
+
+---
+*Developed with focus on speed, privacy, and extensibility.*
