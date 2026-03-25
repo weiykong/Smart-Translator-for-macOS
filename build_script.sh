@@ -24,7 +24,7 @@ if [ $? -eq 0 ]; then
     fi
     
     # Copy new version
-    cp -R "dist/smart_translator_dynamic.app" "/Applications/Smart Translator.app"
+    cp -R "dist/SmartTranslator.app" "/Applications/Smart Translator.app"
     
     if [ $? -eq 0 ]; then
         echo "🎉 Installation complete!"

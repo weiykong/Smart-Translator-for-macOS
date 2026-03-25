@@ -7,6 +7,7 @@ import os
 import threading
 import logging
 from datetime import datetime
+from pynput import keyboard
 
 # Setup Logging
 LOG_DIR = os.path.expanduser("~/Library/Logs/SmartTranslator")
@@ -72,7 +73,41 @@ class SmartTranslatorApp(rumps.App):
         
         self.setup_menu()
         self.start_connection_poll()
+        self.start_hotkey_listener()
         logging.info("App initialized")
+
+    def start_hotkey_listener(self):
+        """Starts a background thread to listen for global hotkeys"""
+        kb_controller = keyboard.Controller()
+
+        def on_hotkey():
+            if not self.is_processing and self.online and self.model:
+                logging.info("Hotkey Ctrl+Cmd+C pressed")
+                
+                # Simulate Cmd+C to copy current selection
+                # Note: We use Key.cmd for macOS
+                with kb_controller.pressed(keyboard.Key.cmd):
+                    kb_controller.tap('c')
+                
+                # Wait for clipboard to update
+                threading.Event().wait(0.2)
+                
+                threading.Thread(target=self.process_task, args=("correct",), daemon=True).start()
+
+        def listener_thread():
+            try:
+                # <ctrl>+<cmd>+c for macOS
+                with keyboard.GlobalHotKeys({
+                    '<ctrl>+<cmd>+c': on_hotkey
+                }) as h:
+                    logging.info("Hotkey listener started for <ctrl>+<cmd>+c")
+                    h.join()
+            except Exception as e:
+                logging.error(f"Hotkey listener error: {e}")
+                if "trusted" in str(e).lower() or "accessibility" in str(e).lower():
+                    logging.warning("Accessibility permissions missing for hotkey listener")
+
+        threading.Thread(target=listener_thread, daemon=True).start()
 
     def load_config(self):
         default_config = {
