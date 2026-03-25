@@ -9,19 +9,19 @@ APP = ['smart_translator_dynamic.py']
 DATA_FILES = []
 OPTIONS = {
     'argv_emulation': False,
-    'packages': ['rumps', 'requests', 'pyperclip'],
+    'packages': ['rumps', 'requests', 'pyperclip', 'pynput'],
     'plist': {
         'LSUIElement': True,
         'CFBundleName': 'SmartTranslator',
         'CFBundleDisplayName': 'Smart Translator',
         'CFBundleIdentifier': 'com.smarttranslator.app',
-        'CFBundleVersion': '1.1.0',
-        'CFBundleShortVersionString': '1.1.0',
+        'CFBundleVersion': '1.1.1',
+        'CFBundleShortVersionString': '1.1.1',
         'NSHumanReadableCopyright': 'Copyright © 2026',
         'NSUserNotificationAlertStyle': 'alert',
     },
     'iconfile': 'icon.icns',
-    'includes': ['json', 'os', 'datetime', 'threading', 'logging'],
+    'includes': ['json', 'os', 'datetime', 'threading', 'logging', 'pynput.keyboard'],
 }
 
 setup(
