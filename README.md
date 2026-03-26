@@ -1,74 +1,87 @@
-# 🌍 Smart Translator for macOS (v1.1.1)
+# Smart Translator for macOS
 
-A high-performance, privacy-focused macOS menu bar application that leverages local LLMs (via [Ollama](https://ollama.com)) to provide instant text correction and translation directly through your clipboard.
+A privacy-focused macOS menu bar app that uses local LLMs (via [Ollama](https://ollama.com)) for instant text correction, translation, and **custom text processing** — all from your clipboard.
 
-## ✨ Key Features
+## Screenshots
 
-*   **⌨️ Global Hotkey:** Press `Ctrl + Cmd + C` to instantly correct the text in your clipboard without opening the menu.
-*   **⚡ Asynchronous Engine:** Non-blocking UI ensures your menu bar stays responsive while the LLM processes text in the background.
-*   **🛠️ Dynamic Configuration:** Fully customizable translation targets, emojis, and system prompts via a built-in Settings menu.
-*   **🌐 Manage Languages:** Add or remove translation languages (e.g., Japanese, Spanish, German) directly from the app interface.
-*   **✏️ Smart Correction:** Enhances grammar, spelling, and clarity while strictly preserving your original formatting and line breaks.
-*   **🔄 History & Undo:** Maintains a clipboard history (up to 10 items), allowing you to quickly revert any accidental overwrites.
-*   **🔒 Privacy First:** 100% local processing. Your data never leaves your machine.
-*   **📝 Professional Logging:** Built-in logging system (`~/Library/Logs/SmartTranslator/`) for easy troubleshooting and status monitoring.
+| Menu | Menu Bar | Processing | Settings |
+|------|----------|------------|----------|
+| ![Main Menu](assets/main.png) | ![Menu Bar](assets/main_menubar.png) | ![Processing](assets/processing_menubar.png) | ![Settings](assets/settings.png) |
 
-## 🛠️ Prerequisites
+## Key Features
 
-1.  **macOS** (Apple Silicon or Intel).
-2.  **Ollama** must be installed and running.
-    *   Download from [ollama.com](https://ollama.com)
-    *   Ensure the server is running (`ollama serve`).
-3.  **Local Models:** Pull at least one model to get started:
-    ```bash
-    ollama pull llama3.2  # Recommended for speed
-    ollama pull mistral   # Recommended for quality
-    ```
+- **Global Hotkey** — Press `Ctrl + Cmd + C` to instantly correct clipboard text.
+- **Custom Use Cases** — Define your own text processing actions (token saving, text cleanup, summarization, tone conversion, etc.). The local LLM refines your description into a proper prompt, then you validate before saving.
+- **Translation** — Translate clipboard text to any language. Add/remove languages on the fly.
+- **Smart Correction** — Fix grammar, spelling, and clarity while preserving formatting.
+- **Async Processing** — Non-blocking background tasks keep the menu bar responsive.
+- **Clipboard History & Undo** — Up to 10 items with one-click undo.
+- **100% Local** — All processing stays on your machine. No data leaves your device.
+- **Dynamic Model Selection** — Switch between available Ollama models at runtime.
 
-## 🚀 Installation & Setup
+## Custom Use Cases
 
-### Recommended: Build as a macOS App
-Building the app creates a standalone `.app` bundle in your `/Applications` folder.
+The app goes beyond correction and translation. You can create any text processing pipeline:
 
-1.  **Clone the Repository**
-2.  **Run the Build Script:**
-    ```bash
-    chmod +x build_script.sh
-    ./build_script.sh
-    ```
-3.  **Grant Permissions:**
-    *   **Accessibility:** Required for the app to read/write to your clipboard and listen for the global hotkey.
-    *   **Notifications:** Required for the app to provide status updates on completion.
+1. Click **Settings > Manage Use Cases > Add Use Case...**
+2. **Describe** what you want (e.g., "remove verbose filler words to save tokens", "strip HTML and clean up formatting")
+3. The local LLM **generates a refined prompt** from your description
+4. **Review and edit** the generated prompt before saving
+5. Your new use case appears in the main menu, ready to use
 
-### Alternative: Run from Source
+Examples of custom use cases:
+- **Token Saver** — Strip unnecessary content to reduce token usage
+- **HTML Cleaner** — Remove tags and extract clean text
+- **Bullet Summarizer** — Condense long text into bullet points
+- **Formal Rewriter** — Convert casual text to business tone
+
+## Prerequisites
+
+1. **macOS** (Apple Silicon or Intel)
+2. **Ollama** installed and running — [ollama.com](https://ollama.com)
+3. At least one local model pulled:
+   ```bash
+   ollama pull llama3.2   # Fast
+   ollama pull mistral    # Higher quality
+   ```
+
+## Installation
+
+### Build as macOS App (recommended)
+
+```bash
+chmod +x build_script.sh
+./build_script.sh
+```
+
+Grant **Accessibility** and **Notifications** permissions when prompted.
+
+### Run from Source
+
 ```bash
 pip install rumps requests pyperclip py2app pynput
 python3 smart_translator_dynamic.py
 ```
 
-## ⚙️ Advanced Configuration
+## Usage
 
-Smart Translator v1.1.1 introduces a robust configuration system located in:
-`~/Library/Application Support/SmartTranslator/config.json`
+1. **Copy** text to your clipboard
+2. Press `Ctrl + Cmd + C` for instant correction, or click the menu bar icon and choose an action
+3. Wait for the **Success** notification
+4. **Paste** your processed text
 
-*   **Change Ollama URL:** Connect to a remote Ollama instance by updating the URL in **Settings**.
-*   **Custom Prompts:** Fine-tune how the AI behaves by editing the prompt templates in the config file.
-*   **Language List:** Add your own languages with custom emojis via the **Manage Languages** menu.
+## Configuration
 
-## 🖥️ Usage
+Config is stored at `~/Library/Application Support/SmartTranslator/config.json`.
 
-1.  **Copy** text to your clipboard.
-2.  **Either:**
-    *   Press `Ctrl + Cmd + C` for instant correction.
-    *   Click the **🌍 icon** in your menu bar and choose an action.
-3.  Wait for the **Success Notification**.
-4.  **Paste** your improved or translated text!
+- **Ollama URL** — Connect to a remote Ollama instance via Settings
+- **Prompts** — Edit correction/translation prompt templates in the config file
+- **Languages** — Add/remove via Settings > Manage Languages
+- **Use Cases** — Add/remove via Settings > Manage Use Cases
+- **Logs** — View at Settings > Open Logs (`~/Library/Logs/SmartTranslator/`)
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
-*   **Hotkey not working:** Ensure "Smart Translator" is added to *System Settings > Privacy & Security > Accessibility*.
-*   **"Offline" Status:** Verify Ollama is running and accessible at the configured URL (default: `http://localhost:11434`).
-*   **UI Not Updating:** Check the logs via **Settings > Open Logs** to see real-time errors or API timeouts.
-
----
-*Developed with focus on speed, privacy, and extensibility.*
+- **Hotkey not working** — Add the app to *System Settings > Privacy & Security > Accessibility*
+- **"Offline" status** — Verify Ollama is running (`ollama serve`)
+- **UI issues** — Check logs via Settings > Open Logs

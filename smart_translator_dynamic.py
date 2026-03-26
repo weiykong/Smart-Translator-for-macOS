@@ -120,7 +120,57 @@ class SmartTranslatorApp(rumps.App):
             "prompts": {
                 "correct": "You're a language enhancer expert. Enhance and correct input text while preserving its language. Return ONLY the corrected text.\n\nText:\n{text}",
                 "translate": "You're a translator expert. Accurate, preserve formatting. Return ONLY the translated text to {action}.\n\nText:\n{text}"
-            }
+            },
+            "use_cases": [
+                {
+                    "name": "Token Saver",
+                    "emoji": "🪙",
+                    "description": "Strip verbose content to reduce token usage",
+                    "prompt": "Compress the following text. Remove filler words, redundant phrases, pleasantries, and unnecessary detail. Keep all technical terms, names, numbers, and key facts. Output the shorter version only, nothing else.\n\nText:\n{text}"
+                },
+                {
+                    "name": "Debug Helper",
+                    "emoji": "🐛",
+                    "description": "Analyze code and suggest fixes",
+                    "prompt": "You are a code debugger. Analyze the code below. List each bug or issue as:\n- LINE: issue → fix\n\nIf no bugs found, say \"No issues found.\" Output ONLY the bug list, no extra commentary.\n\nCode:\n{text}"
+                },
+                {
+                    "name": "Error Condenser",
+                    "emoji": "🔴",
+                    "description": "Extract key info from verbose error logs",
+                    "prompt": "Extract the essential information from this error output. Return ONLY:\n1. Error type and message (one line)\n2. Root cause file and line number\n3. Key variable values if shown\n\nDrop all stack frames that are from libraries or frameworks. Keep only YOUR code frames. No extra text.\n\nError:\n{text}"
+                },
+                {
+                    "name": "Explain Code",
+                    "emoji": "📖",
+                    "description": "Explain what a piece of code does",
+                    "prompt": "Explain what this code does in 2-3 short bullet points. Be direct. Mention inputs, outputs, and side effects. No code blocks in your answer.\n\nCode:\n{text}"
+                },
+                {
+                    "name": "Git Commit Msg",
+                    "emoji": "📝",
+                    "description": "Generate a commit message from a diff",
+                    "prompt": "Write a git commit message for this diff. Use conventional commit format: type(scope): description. One line, max 72 chars. Types: feat, fix, refactor, docs, test, chore. Output ONLY the commit message line.\n\nDiff:\n{text}"
+                },
+                {
+                    "name": "JSON Cleaner",
+                    "emoji": "🧹",
+                    "description": "Fix and format broken JSON",
+                    "prompt": "Fix and format the following JSON. Correct any syntax errors (missing quotes, trailing commas, unescaped characters). Return ONLY the valid, pretty-printed JSON. No explanation.\n\n{text}"
+                },
+                {
+                    "name": "Log Extractor",
+                    "emoji": "📋",
+                    "description": "Extract warnings and errors from log output",
+                    "prompt": "From the log output below, extract ONLY lines containing errors, warnings, or failures. Group them as:\n\nERRORS:\n- ...\n\nWARNINGS:\n- ...\n\nIf none found in a category, skip it. No other output.\n\nLogs:\n{text}"
+                },
+                {
+                    "name": "SQL from Error",
+                    "emoji": "🗄️",
+                    "description": "Extract and fix SQL from database errors",
+                    "prompt": "Extract the SQL query from this database error message. Fix the syntax error if there is one. Return ONLY the corrected SQL query, nothing else.\n\nError:\n{text}"
+                }
+            ]
         }
         if os.path.exists(self.config_file):
             try:
@@ -128,6 +178,11 @@ class SmartTranslatorApp(rumps.App):
                     config = json.load(f)
                     for k, v in default_config.items():
                         if k not in config: config[k] = v
+                    # Merge default use cases that don't exist yet
+                    existing_names = {uc['name'] for uc in config.get('use_cases', [])}
+                    for uc in default_config.get('use_cases', []):
+                        if uc['name'] not in existing_names:
+                            config.setdefault('use_cases', []).append(uc)
                     return config
             except Exception as e:
                 logging.error(f"Config load error: {e}")
@@ -172,16 +227,23 @@ class SmartTranslatorApp(rumps.App):
         self.menu.clear()
         self.menu.add(rumps.MenuItem("Correct Clipboard", callback=self.on_action))
         self.menu.add(rumps.separator)
-        
+
         for target in self.config.get("targets", []):
             self.menu.add(rumps.MenuItem(f"Translate to {target['name']}", callback=self.on_action))
-            
+
+        # Custom Use Cases
+        use_cases = self.config.get("use_cases", [])
+        if use_cases:
+            self.menu.add(rumps.separator)
+            for uc in use_cases:
+                self.menu.add(rumps.MenuItem(f"{uc['emoji']} {uc['name']}", callback=self.on_use_case_action))
+
         self.menu.add(rumps.separator)
         self.add_models_submenu()
-        
+
         settings = rumps.MenuItem("Settings")
         settings.add(rumps.MenuItem("Change Ollama URL", callback=self.change_url))
-        
+
         # Language Management
         lang_menu = rumps.MenuItem("Manage Languages")
         lang_menu.add(rumps.MenuItem("Add Language...", callback=self.add_language))
@@ -192,13 +254,24 @@ class SmartTranslatorApp(rumps.App):
                     return lambda _: self.remove_language(name)
                 lang_menu.add(rumps.MenuItem(f"Remove {t['name']}", callback=make_remove_cb(t['name'])))
         settings.add(lang_menu)
-        
+
+        # Use Case Management
+        uc_menu = rumps.MenuItem("Manage Use Cases")
+        uc_menu.add(rumps.MenuItem("Add Use Case...", callback=self.add_use_case))
+        if use_cases:
+            uc_menu.add(rumps.separator)
+            for uc in use_cases:
+                def make_remove_uc_cb(name):
+                    return lambda _: self.remove_use_case(name)
+                uc_menu.add(rumps.MenuItem(f"Remove {uc['name']}", callback=make_remove_uc_cb(uc['name'])))
+        settings.add(uc_menu)
+
         settings.add(rumps.separator)
         settings.add(rumps.MenuItem("Edit Config File", callback=lambda _: os.system(f"open -e '{self.config_file}'")))
         settings.add(rumps.MenuItem("Open Logs", callback=lambda _: os.system(f"open {LOG_DIR}")))
         settings.add(rumps.MenuItem("Open Config Folder", callback=lambda _: os.system(f"open '{self.app_support_dir}'")))
         self.menu.add(settings)
-        
+
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("Undo Last", callback=self.undo_last))
         self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
@@ -234,6 +307,173 @@ class SmartTranslatorApp(rumps.App):
         self.save_config()
         rumps.notification("Success", f"Removed {name}", "")
 
+    def add_use_case(self, _):
+        """Guide user through creating a custom use case with LLM-refined prompt"""
+        # Step 1: Get the use case description from user
+        desc_window = rumps.Window(
+            message="Describe what you want to do with your clipboard text.\n\n"
+                    "Examples:\n"
+                    "• Save tokens by removing verbose parts\n"
+                    "• Strip HTML tags and clean up text\n"
+                    "• Summarize long text into bullet points\n"
+                    "• Convert to formal business tone",
+            title="New Use Case - Describe Your Goal",
+            default_text="",
+            ok="Next",
+            cancel="Cancel",
+            dimensions=(320, 120)
+        )
+        desc_res = desc_window.run()
+        if not desc_res.clicked or not desc_res.text.strip():
+            return
+
+        user_description = desc_res.text.strip()
+
+        # Step 2: Get a short name
+        name_window = rumps.Window(
+            message="Give this use case a short name for the menu.",
+            title="Use Case Name",
+            default_text="",
+            ok="Next",
+            cancel="Cancel"
+        )
+        name_res = name_window.run()
+        if not name_res.clicked or not name_res.text.strip():
+            return
+
+        uc_name = name_res.text.strip()
+
+        # Step 3: Get emoji
+        emoji_window = rumps.Window(
+            message=f"Choose an emoji for '{uc_name}' (optional)",
+            title="Use Case Emoji",
+            default_text="⚡",
+            ok="Generate Prompt",
+            cancel="Cancel"
+        )
+        emoji_res = emoji_window.run()
+        if not emoji_res.clicked:
+            return
+        uc_emoji = emoji_res.text.strip() or "⚡"
+
+        # Step 4: Use the local LLM to refine the description into a proper prompt
+        if not self.online or not self.model:
+            rumps.notification("Error", "Ollama not available", "Cannot generate prompt without a running model")
+            return
+
+        self.title = "⏳ Generating prompt..."
+        try:
+            meta_prompt = (
+                "You are a prompt engineering expert. The user wants to create a text processing tool "
+                "that operates on clipboard text. Based on their description below, generate a clear, "
+                "precise system prompt that an LLM will use to process the clipboard text.\n\n"
+                "Requirements for the generated prompt:\n"
+                "- It must instruct the LLM to return ONLY the processed text, nothing else\n"
+                "- It must be specific and unambiguous\n"
+                "- It must include {text} as a placeholder where the input text goes\n"
+                "- Keep it concise but complete\n\n"
+                f"User's description: {user_description}\n\n"
+                "Return ONLY the prompt text, no explanation."
+            )
+            refined_prompt = self.client.generate(self.model, meta_prompt)
+        except Exception as e:
+            logging.error(f"Prompt generation failed: {e}")
+            rumps.notification("Error", "Failed to generate prompt", str(e))
+            self.title = "🌍 Translator" if self.online else "❌ Offline"
+            return
+        finally:
+            self.title = "🌍 Translator" if self.online else "❌ Offline"
+
+        if not refined_prompt:
+            rumps.notification("Error", "Empty prompt generated", "Try again with a clearer description")
+            return
+
+        # Ensure {text} placeholder exists
+        if "{text}" not in refined_prompt:
+            refined_prompt += "\n\nText:\n{text}"
+
+        # Step 5: Show the refined prompt to user for validation/editing
+        validate_window = rumps.Window(
+            message="Review and edit the AI-generated prompt below.\n"
+                    "Make sure {text} placeholder is present.\n"
+                    "Click 'Save' to add this use case.",
+            title=f"Validate Prompt for '{uc_name}'",
+            default_text=refined_prompt,
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(400, 200)
+        )
+        validate_res = validate_window.run()
+        if not validate_res.clicked:
+            return
+
+        final_prompt = validate_res.text.strip()
+        if not final_prompt:
+            rumps.notification("Error", "Prompt cannot be empty", "")
+            return
+
+        if "{text}" not in final_prompt:
+            final_prompt += "\n\nText:\n{text}"
+
+        # Step 6: Save the use case
+        if "use_cases" not in self.config:
+            self.config["use_cases"] = []
+        self.config["use_cases"].append({
+            "name": uc_name,
+            "emoji": uc_emoji,
+            "description": user_description,
+            "prompt": final_prompt
+        })
+        self.save_config()
+        rumps.notification("Success", f"Added use case: {uc_name}", "Available in the menu now")
+
+    def remove_use_case(self, name):
+        self.config["use_cases"] = [uc for uc in self.config.get("use_cases", []) if uc['name'] != name]
+        self.save_config()
+        rumps.notification("Success", f"Removed use case: {name}", "")
+
+    def on_use_case_action(self, sender):
+        """Handle click on a custom use case menu item"""
+        if self.is_processing:
+            return
+        # Parse the name by stripping the emoji prefix
+        title = sender.title
+        # Find matching use case
+        for uc in self.config.get("use_cases", []):
+            expected_title = f"{uc['emoji']} {uc['name']}"
+            if title == expected_title:
+                threading.Thread(
+                    target=self.process_use_case, args=(uc,), daemon=True
+                ).start()
+                return
+
+    def process_use_case(self, use_case):
+        """Process clipboard text using a custom use case prompt"""
+        self.is_processing = True
+        self.title = "⏳ Processing..."
+        try:
+            text = pyperclip.paste().strip()
+            if not text:
+                rumps.notification("Clipboard Empty", "", "Copy some text first")
+                return
+
+            logging.info(f"Processing use case: {use_case['name']}")
+            prompt = use_case['prompt'].format(text=text)
+            result = self.client.generate(self.model, prompt)
+            if result:
+                pyperclip.copy(result)
+                self.clipboard_history.append(result)
+                preview = result[:50] + "..." if len(result) > 50 else result
+                rumps.notification("Success", f"{use_case['emoji']} {use_case['name']} complete", preview)
+            else:
+                rumps.notification("Error", "Empty result", "")
+        except Exception as e:
+            logging.error(f"Use case task failed: {e}")
+            rumps.notification("Error", "Action failed", str(e))
+        finally:
+            self.is_processing = False
+            self.title = "🌍 Translator" if self.online else "❌ Offline"
+
     def add_models_submenu(self):
         short = self.model.split(':')[0] if self.model else "None"
         models_menu = rumps.MenuItem(f"Model: {short}")
@@ -262,9 +502,12 @@ class SmartTranslatorApp(rumps.App):
 
     def update_menu_state(self):
         clickable = self.online and self.available_models and self.model
+        uc_titles = {f"{uc['emoji']} {uc['name']}" for uc in self.config.get("use_cases", [])}
         for k in self.menu.keys():
             if k == "Correct Clipboard" or k.startswith("Translate to"):
                 self.menu[k].set_callback(self.on_action if clickable else None)
+            elif k in uc_titles:
+                self.menu[k].set_callback(self.on_use_case_action if clickable else None)
 
     def select_model(self, name):
         self.model = name
