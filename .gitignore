@@ -5,3 +5,14 @@ __pycache__/
 .DS_Store
 models.json
 *.app
+
+# Local secrets
+.env
+.env.*
+!.env.example
+gemini_api_key
+gemini_api_key.*
+gemini-api-key
+gemini-api-key.*
+google_api_key
+google_api_key.*
