@@ -6,7 +6,7 @@ This creates a standalone app that can be installed in the Applications folder.
 from setuptools import setup
 
 APP = ['smart_translator_dynamic.py']
-DATA_FILES = []
+DATA_FILES = ['gemini_playwright_bridge.py']
 OPTIONS = {
     'argv_emulation': False,
     'packages': ['rumps', 'requests', 'pyperclip', 'pynput'],
@@ -15,8 +15,8 @@ OPTIONS = {
         'CFBundleName': 'SmartTranslator',
         'CFBundleDisplayName': 'Smart Translator',
         'CFBundleIdentifier': 'com.smarttranslator.app',
-        'CFBundleVersion': '1.1.1',
-        'CFBundleShortVersionString': '1.1.1',
+        'CFBundleVersion': '1.2.0',
+        'CFBundleShortVersionString': '1.2.0',
         'NSHumanReadableCopyright': 'Copyright © 2026',
         'NSUserNotificationAlertStyle': 'alert',
     },
