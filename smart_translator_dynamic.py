@@ -25,6 +25,16 @@ logging.basicConfig(
 APP_TITLE_ONLINE = "🌍"
 APP_TITLE_BUSY = "⏳"
 APP_TITLE_OFFLINE = "❌"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_GEMINI_MODELS = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+]
+SUPPORTED_PROVIDERS = {"ollama", "gemini"}
 
 LEGACY_DEFAULT_PROMPTS = {
     "correct": (
@@ -119,6 +129,8 @@ def build_default_use_cases():
             "name": "Token Saver (Aggressive)",
             "emoji": "✂️",
             "description": "Use the model to shorten prose while preserving technical details",
+            "processor": "gemini",
+            "profile": "token_saver_aggressive",
             "prompt": (
                 "Shorten the text conservatively.\n\n"
                 "Rules:\n"
@@ -217,11 +229,21 @@ def build_default_use_cases():
 def build_default_config():
     return {
         "ollama_url": "http://localhost:11434",
+        "provider": "ollama",
         "targets": [
             {"name": "Chinese", "emoji": "🇨🇳"},
             {"name": "French", "emoji": "🇫🇷"},
             {"name": "English", "emoji": "🇺🇸"},
         ],
+        "gemini": {
+            "api_key": "",
+            "model": DEFAULT_GEMINI_MODEL,
+            "models": DEFAULT_GEMINI_MODELS,
+            "transport": "auto",
+            "playwright_url": "https://gemini.google.com/app",
+            "playwright_profile_dir": "~/Library/Application Support/SmartTranslator/gemini-playwright-profile",
+            "playwright_timeout_sec": 90,
+        },
         "prompts": {
             "correct": (
                 "You are a senior editor. Improve grammar, spelling, punctuation, and clarity "
@@ -284,6 +306,137 @@ class OllamaClient:
             raise
 
 
+class GeminiClient:
+    """Minimal Gemini REST client."""
+
+    API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+    def __init__(self):
+        self.session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8)
+        self.session.mount("https://", adapter)
+
+    def check_connection(self, api_key):
+        if not api_key:
+            return False
+        try:
+            response = self.session.get(
+                f"{self.API_BASE}/models",
+                headers={"x-goog-api-key": api_key},
+                timeout=(2, 5),
+            )
+            response.raise_for_status()
+            return True
+        except Exception:
+            return False
+
+    def fetch_models(self, api_key):
+        if not api_key:
+            return None
+        try:
+            response = self.session.get(
+                f"{self.API_BASE}/models",
+                headers={"x-goog-api-key": api_key},
+                timeout=(2, 10),
+            )
+            response.raise_for_status()
+            models = response.json().get("models", [])
+            return [
+                model["name"].replace("models/", "")
+                for model in models
+                if "generateContent" in model.get("supportedGenerationMethods", [])
+            ]
+        except Exception as exc:
+            logging.error(f"Failed to fetch Gemini models: {exc}")
+            return None
+
+    def generate(self, api_key, model, prompt):
+        response = self.session.post(
+            f"{self.API_BASE}/models/{model}:generateContent",
+            headers={
+                "x-goog-api-key": api_key,
+                "Content-Type": "application/json",
+            },
+            json={
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": prompt}],
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "topP": 0.95,
+                    "maxOutputTokens": 2048,
+                },
+            },
+            timeout=(3, 45),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return self.extract_text(payload)
+
+    def extract_text(self, payload):
+        parts = []
+        for candidate in payload.get("candidates", []):
+            content = candidate.get("content", {})
+            for part in content.get("parts", []):
+                text = part.get("text")
+                if text:
+                    parts.append(text)
+            if parts:
+                break
+        return "\n".join(parts).strip()
+
+
+class GeminiPlaywrightClient:
+    """Calls an external Playwright bridge so py2app does not need to bundle Playwright."""
+
+    def generate(self, prompt, profile_dir, page_url, timeout_sec):
+        bridge_path = self.get_bridge_path()
+        python_cmd = os.environ.get("SMART_TRANSLATOR_PLAYWRIGHT_PYTHON", "python3")
+        payload = {
+            "prompt": prompt,
+            "profile_dir": profile_dir,
+            "page_url": page_url,
+            "timeout_sec": timeout_sec,
+        }
+
+        try:
+            result = subprocess.run(
+                [python_cmd, bridge_path],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                timeout=max(30, int(timeout_sec) + 20),
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Playwright bridge Python not found: {python_cmd}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Playwright bridge timed out") from exc
+
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
+        try:
+            payload = json.loads(stdout) if stdout else {}
+        except json.JSONDecodeError:
+            payload = {}
+
+        if result.returncode == 0 and payload.get("ok") and payload.get("text"):
+            return payload["text"]
+
+        error_message = payload.get("error") or stderr or stdout or "Playwright bridge failed"
+        raise RuntimeError(error_message)
+
+    def get_bridge_path(self):
+        resource_dir = os.environ.get("RESOURCEPATH") or os.path.dirname(os.path.abspath(__file__))
+        bridge_path = os.path.join(resource_dir, "gemini_playwright_bridge.py")
+        if not os.path.exists(bridge_path):
+            raise RuntimeError(f"Playwright bridge not found at {bridge_path}")
+        return bridge_path
+
+
 class SmartTranslatorApp(rumps.App):
     def __init__(self):
         super().__init__(APP_TITLE_ONLINE, quit_button=None)
@@ -305,6 +458,8 @@ class SmartTranslatorApp(rumps.App):
         # State
         self.config = self.load_config()
         self.client = OllamaClient(self.config["ollama_url"])
+        self.gemini_client = GeminiClient()
+        self.gemini_playwright_client = GeminiPlaywrightClient()
         self.available_models, self.model = self.load_models()
         self.online = False
         self.processing_menu_items = []
@@ -332,7 +487,7 @@ class SmartTranslatorApp(rumps.App):
 
         config = dict(default_config)
         for key, value in user_config.items():
-            if key not in {"prompts", "use_cases"}:
+            if key not in {"prompts", "use_cases", "gemini"}:
                 config[key] = value
 
         prompts = dict(default_config["prompts"])
@@ -342,18 +497,29 @@ class SmartTranslatorApp(rumps.App):
                 prompts[prompt_name] = default_config["prompts"][prompt_name]
         config["prompts"] = prompts
 
+        gemini_config = dict(default_config["gemini"])
+        gemini_config.update(user_config.get("gemini", {}))
+        if user_config.get("gemini_api_key") and not gemini_config.get("api_key"):
+            gemini_config["api_key"] = user_config["gemini_api_key"]
+        if user_config.get("gemini_model"):
+            gemini_config["model"] = user_config["gemini_model"]
+        if isinstance(user_config.get("gemini_models"), list):
+            gemini_config["models"] = user_config["gemini_models"]
+        config["gemini"] = gemini_config
+
         defaults_by_name = {uc["name"]: uc for uc in default_config["use_cases"]}
         merged_use_cases = []
         seen_names = set()
 
         for use_case in user_config.get("use_cases", []):
             current = dict(use_case)
-            name = current.get("name")
+            original_name = current.get("name")
+            name = original_name
+            legacy_use_case = LEGACY_DEFAULT_USE_CASES.get(original_name)
             if name == "Token Saver" and current.get("prompt") == LEGACY_DEFAULT_USE_CASES["Token Saver"]["prompt"]:
                 current["name"] = "Token Saver (Aggressive)"
                 name = current["name"]
             default_use_case = defaults_by_name.get(name)
-            legacy_use_case = LEGACY_DEFAULT_USE_CASES.get(name)
 
             if default_use_case:
                 if not current.get("emoji"):
@@ -434,7 +600,7 @@ class SmartTranslatorApp(rumps.App):
         correct_callback = self.make_action_callback("correct")
         self.correct_item = rumps.MenuItem("✨ Correct Clipboard", callback=correct_callback)
         self.processing_menu_items.append(
-            {"item": self.correct_item, "callback": correct_callback, "requires_model": True}
+            {"item": self.correct_item, "callback": correct_callback, "availability": "selected_provider"}
         )
         self.menu.add(self.correct_item)
 
@@ -446,7 +612,7 @@ class SmartTranslatorApp(rumps.App):
                 callback = self.make_action_callback(target["name"])
                 item = rumps.MenuItem(label, callback=callback)
                 self.processing_menu_items.append(
-                    {"item": item, "callback": callback, "requires_model": True}
+                    {"item": item, "callback": callback, "availability": "selected_provider"}
                 )
                 translate_menu.add(item)
         else:
@@ -466,7 +632,7 @@ class SmartTranslatorApp(rumps.App):
                     {
                         "item": item,
                         "callback": callback,
-                        "requires_model": use_case.get("processor") != "deterministic",
+                        "availability": self.get_use_case_availability(use_case),
                     }
                 )
                 skills_menu.add(item)
@@ -477,6 +643,7 @@ class SmartTranslatorApp(rumps.App):
         self.menu.add(skills_menu)
 
         self.menu.add(rumps.separator)
+        self.add_provider_submenu()
         self.add_models_submenu()
         self.add_settings_submenu()
 
@@ -487,7 +654,38 @@ class SmartTranslatorApp(rumps.App):
 
         self.refresh_menu_state(force=True)
 
+    def add_provider_submenu(self):
+        current_provider = self.get_selected_provider()
+        provider_menu = rumps.MenuItem(f"🧠 Provider: {current_provider.title()}")
+        for provider in ("ollama", "gemini"):
+            prefix = "●" if provider == current_provider else "○"
+            provider_menu.add(
+                rumps.MenuItem(f"{prefix} {provider.title()}", callback=self.make_select_provider_callback(provider))
+            )
+        self.menu.add(provider_menu)
+
     def add_models_submenu(self):
+        current_provider = self.get_selected_provider()
+        if current_provider == "gemini":
+            models_menu = rumps.MenuItem(f"🤖 Model: {self.short_model_name(self.get_gemini_model())}")
+            current_model = self.get_gemini_model()
+            cached_models = self.get_gemini_models()
+            if cached_models:
+                for model_name in cached_models:
+                    callback = self.make_select_model_callback(model_name)
+                    prefix = "●" if model_name == current_model else "○"
+                    models_menu.add(rumps.MenuItem(f"{prefix} {model_name}", callback=callback))
+            else:
+                current_item = rumps.MenuItem(f"Current: {current_model}")
+                current_item.set_callback(None)
+                models_menu.add(current_item)
+            models_menu.add(rumps.separator)
+            models_menu.add(rumps.MenuItem("Change Gemini Model...", callback=self.change_gemini_model))
+            models_menu.add(rumps.MenuItem("↻ Refresh Gemini Models", callback=self.refresh_models))
+            models_menu.add(rumps.MenuItem("Reconnect Now", callback=self.reconnect_now))
+            self.menu.add(models_menu)
+            return
+
         models_menu = rumps.MenuItem(f"🤖 Model: {self.short_model_name(self.model)}")
         if self.available_models:
             for model_name in self.available_models:
@@ -507,6 +705,10 @@ class SmartTranslatorApp(rumps.App):
     def add_settings_submenu(self):
         settings = rumps.MenuItem("⚙️ Settings")
         settings.add(rumps.MenuItem("Change Ollama URL", callback=self.change_url))
+        settings.add(rumps.MenuItem("Change Gemini API Key", callback=self.change_gemini_api_key))
+        settings.add(rumps.MenuItem("Change Gemini Model", callback=self.change_gemini_model))
+        settings.add(rumps.MenuItem("Change Gemini Transport", callback=self.change_gemini_transport))
+        settings.add(rumps.MenuItem("Change Playwright Profile Path", callback=self.change_playwright_profile_dir))
 
         lang_menu = rumps.MenuItem("Manage Languages")
         lang_menu.add(rumps.MenuItem("Add Language...", callback=self.add_language))
@@ -541,18 +743,20 @@ class SmartTranslatorApp(rumps.App):
         self.menu.add(settings)
 
     def make_action_callback(self, action):
-        return lambda _: self.start_processing_task(self.process_task, action, requires_model=True)
+        return lambda _: self.start_processing_task(self.process_task, action, availability="selected_provider")
 
     def make_use_case_callback(self, use_case):
-        requires_model = use_case.get("processor") != "deterministic"
         return lambda _: self.start_processing_task(
             self.process_use_case,
             dict(use_case),
-            requires_model=requires_model,
+            availability=self.get_use_case_availability(use_case),
         )
 
     def make_select_model_callback(self, model_name):
         return lambda _: self.select_model(model_name)
+
+    def make_select_provider_callback(self, provider):
+        return lambda _: self.select_provider(provider)
 
     def make_remove_language_callback(self, name):
         return lambda _: self.remove_language(name)
@@ -561,32 +765,122 @@ class SmartTranslatorApp(rumps.App):
         return lambda _: self.remove_use_case(name)
 
     def build_status_line(self):
+        provider = self.get_selected_provider()
+        model_label = self.short_model_name(self.get_selected_model_name())
         if self.is_processing:
-            return f"Status: Working with {self.short_model_name(self.model)}"
-        if self.online and self.model:
-            return f"Status: Ready • {self.short_model_name(self.model)}"
+            return f"Status: Working with {provider.title()} • {model_label}"
+        if provider == "gemini":
+            if self.is_gemini_ready():
+                return f"Status: Gemini ready • {model_label}"
+            return "Status: Gemini needs API key or Playwright session"
+        if self.is_ollama_ready():
+            return f"Status: Ollama ready • {model_label}"
         if self.online:
-            return "Status: Connected • refresh models"
-        return "Status: Offline • start Ollama"
+            return "Status: Ollama connected • refresh models"
+        return "Status: Ollama offline • start server"
 
     def build_hint_line(self):
-        if self.online and self.model:
+        provider = self.get_selected_provider()
+        if provider == "gemini":
+            return f"Provider: Gemini via {self.get_gemini_transport()}"
+        if self.is_ollama_ready():
             return "Hotkey: Ctrl+Cmd+C for instant correction"
-        return "Offline mode: deterministic skills still work"
+        return "Safe skills work without Ollama; switch provider to Gemini if needed"
+
+    def get_selected_provider(self):
+        provider = self.config.get("provider", "ollama")
+        return provider if provider in SUPPORTED_PROVIDERS else "ollama"
+
+    def get_selected_model_name(self):
+        if self.get_selected_provider() == "gemini":
+            return self.get_gemini_model()
+        return self.model
+
+    def is_ollama_ready(self):
+        return self.online and bool(self.model)
+
+    def is_gemini_ready(self):
+        transport = self.get_gemini_transport()
+        if transport == "api":
+            return bool(self.get_gemini_api_key())
+        return True
+
+    def is_selected_provider_ready(self):
+        if self.get_selected_provider() == "gemini":
+            return self.is_gemini_ready()
+        return self.is_ollama_ready()
+
+    def get_use_case_availability(self, use_case):
+        processor = use_case.get("processor")
+        if processor == "deterministic":
+            return "deterministic"
+        if processor == "gemini":
+            return "gemini"
+        return "selected_provider"
+
+    def is_availability_ready(self, availability):
+        if availability == "deterministic":
+            return True
+        if availability == "gemini":
+            return self.is_gemini_ready()
+        return self.is_selected_provider_ready()
+
+    def build_unavailable_message(self, availability):
+        if availability == "gemini":
+            transport = self.get_gemini_transport()
+            if transport == "api":
+                return ("Gemini unavailable", "Set GEMINI_API_KEY, GOOGLE_API_KEY, or a Gemini key in Settings")
+            return ("Gemini unavailable", "Configure Playwright login or switch Gemini transport")
+
+        if self.get_selected_provider() == "gemini":
+            transport = self.get_gemini_transport()
+            if transport == "api":
+                return ("Gemini unavailable", "Set GEMINI_API_KEY, GOOGLE_API_KEY, or a Gemini key in Settings")
+            return ("Gemini unavailable", "Configure Playwright login or switch Gemini transport")
+
+        return ("Ollama unavailable", "Start Ollama and refresh models first")
+
+    def get_gemini_transport(self):
+        transport = self.config.get("gemini", {}).get("transport", "auto").strip().lower()
+        return transport if transport in {"auto", "api", "playwright"} else "auto"
+
+    def get_playwright_profile_dir(self):
+        path = self.config.get("gemini", {}).get("playwright_profile_dir", "")
+        return os.path.expanduser(path.strip()) if path else os.path.expanduser(
+            "~/Library/Application Support/SmartTranslator/gemini-playwright-profile"
+        )
+
+    def get_playwright_url(self):
+        return self.config.get("gemini", {}).get("playwright_url", "https://gemini.google.com/app").strip()
+
+    def get_playwright_timeout_sec(self):
+        value = self.config.get("gemini", {}).get("playwright_timeout_sec", 90)
+        try:
+            return max(15, int(value))
+        except (TypeError, ValueError):
+            return 90
 
     def refresh_menu_state(self, force=False):
-        model_ready = self.online and bool(self.model)
+        provider_ready = self.is_selected_provider_ready()
         undo_enabled = len(self.clipboard_history) > 1
-        snapshot = (model_ready, self.is_processing, undo_enabled, self.build_status_line(), self.build_hint_line())
+        snapshot = (
+            self.get_selected_provider(),
+            self.get_selected_model_name(),
+            provider_ready,
+            self.is_processing,
+            undo_enabled,
+            self.build_status_line(),
+            self.build_hint_line(),
+        )
 
         if not force and snapshot == self._last_menu_snapshot:
             return
 
-        self.status_item.title = snapshot[2]
-        self.hint_item.title = snapshot[3]
+        self.status_item.title = snapshot[5]
+        self.hint_item.title = snapshot[6]
 
         for entry in self.processing_menu_items:
-            enabled = not self.is_processing and (not entry["requires_model"] or model_ready)
+            enabled = not self.is_processing and self.is_availability_ready(entry["availability"])
             entry["item"].set_callback(entry["callback"] if enabled else None)
 
         if self.undo_item:
@@ -598,7 +892,7 @@ class SmartTranslatorApp(rumps.App):
     def update_title(self):
         if self.is_processing:
             self.title = APP_TITLE_BUSY
-        elif self.online:
+        elif self.is_selected_provider_ready():
             self.title = APP_TITLE_ONLINE
         else:
             self.title = APP_TITLE_OFFLINE
@@ -624,7 +918,7 @@ class SmartTranslatorApp(rumps.App):
         kb_controller = keyboard.Controller()
 
         def on_hotkey():
-            if not self.online or not self.model:
+            if not self.is_selected_provider_ready():
                 return
             if not self.begin_processing():
                 return
@@ -668,9 +962,10 @@ class SmartTranslatorApp(rumps.App):
             self.is_processing = False
         self.refresh_menu_state(force=True)
 
-    def start_processing_task(self, handler, *args, requires_model=True):
-        if requires_model and (not self.online or not self.model):
-            rumps.notification("Ollama", "Model unavailable", "Start Ollama and refresh models first")
+    def start_processing_task(self, handler, *args, availability="selected_provider"):
+        if not self.is_availability_ready(availability):
+            title, message = self.build_unavailable_message(availability)
+            rumps.notification(title, "Action unavailable", message)
             return
         if not self.begin_processing():
             return
@@ -689,9 +984,15 @@ class SmartTranslatorApp(rumps.App):
                 return
             self._refreshing_models = True
 
+        provider = self.get_selected_provider()
+
         def task():
             try:
                 self.title = APP_TITLE_BUSY
+                if provider == "gemini":
+                    self.refresh_gemini_models(notify=notify)
+                    return
+
                 models = self.client.fetch_models()
                 if models is None:
                     self.online = False
@@ -729,7 +1030,49 @@ class SmartTranslatorApp(rumps.App):
 
         threading.Thread(target=task, daemon=True).start()
 
+    def refresh_gemini_models(self, notify=True):
+        api_key = self.get_gemini_api_key()
+        if not api_key:
+            if notify:
+                rumps.notification(
+                    "Gemini Models",
+                    "API key required",
+                    "Set GEMINI_API_KEY, GOOGLE_API_KEY, or a Gemini key in Settings",
+                )
+            self.refresh_menu_state(force=True)
+            return
+
+        models = self.gemini_client.fetch_models(api_key)
+        if models is None:
+            if notify:
+                rumps.notification("Gemini Models", "Unable to reach Gemini", "Check the API key and network")
+            self.refresh_menu_state(force=True)
+            return
+
+        self.config.setdefault("gemini", {})
+        self.config["gemini"]["models"] = models or DEFAULT_GEMINI_MODELS
+        current_model = self.get_gemini_model()
+        if models and current_model not in models:
+            self.config["gemini"]["model"] = DEFAULT_GEMINI_MODEL if DEFAULT_GEMINI_MODEL in models else models[0]
+
+        self.save_config()
+        if notify:
+            rumps.notification("Gemini Models", f"Found {len(models)} model(s)", self.short_model_name(self.get_gemini_model()))
+
     def reconnect_now(self, _):
+        if self.get_selected_provider() == "gemini":
+            api_key = self.get_gemini_api_key()
+            transport = self.get_gemini_transport()
+            if api_key and self.gemini_client.check_connection(api_key):
+                self.refresh_models_in_background(notify=True)
+                return
+            if transport == "api":
+                rumps.notification("Gemini", "Offline", "Check the API key and network")
+            else:
+                rumps.notification("Gemini", "Ready", "Playwright login is checked when an action runs")
+            self.refresh_menu_state(force=True)
+            return
+
         self._attempted_model_bootstrap = False
         self.online = self.client.check_connection()
         self.refresh_menu_state(force=True)
@@ -739,10 +1082,28 @@ class SmartTranslatorApp(rumps.App):
             rumps.notification("Ollama", "Offline", "Check the server URL and local Ollama process")
 
     def select_model(self, name):
+        if self.get_selected_provider() == "gemini":
+            self.config.setdefault("gemini", {})
+            self.config["gemini"]["model"] = name
+            cached_models = self.get_gemini_models()
+            if name not in cached_models:
+                self.config["gemini"]["models"] = cached_models + [name]
+            self.save_config()
+            rumps.notification("Model Changed", "", f"Using {name}")
+            return
+
         self.model = name
         self.save_models()
         self.setup_menu()
         rumps.notification("Model Changed", "", f"Using {name}")
+
+    def select_provider(self, provider):
+        if provider not in SUPPORTED_PROVIDERS:
+            return
+        self.config["provider"] = provider
+        self.save_config()
+        self.refresh_menu_state(force=True)
+        rumps.notification("Provider Changed", "", f"Using {provider.title()}")
 
     def refresh_models(self, _):
         self.refresh_models_in_background(notify=True)
@@ -762,7 +1123,7 @@ class SmartTranslatorApp(rumps.App):
         logging.info(f"Processing action: {action}")
         prompt_template = self.config["prompts"]["correct"] if action == "correct" else self.config["prompts"]["translate"]
         prompt = prompt_template.format(text=text, action=action)
-        result = self.client.generate(self.model, prompt)
+        result = self.generate_with_selected_provider(prompt)
 
         if not result:
             rumps.notification("Error", "Empty result", "")
@@ -786,9 +1147,11 @@ class SmartTranslatorApp(rumps.App):
         logging.info(f"Processing skill: {use_case['name']}")
         if use_case.get("processor") == "deterministic":
             result = self.run_deterministic_use_case(use_case, text)
+        elif use_case.get("processor") == "gemini":
+            result = self.run_gemini_use_case(use_case, text)
         else:
             prompt = use_case["prompt"].format(text=text)
-            result = self.client.generate(self.model, prompt)
+            result = self.generate_with_selected_provider(prompt)
         if not result:
             rumps.notification("Error", "Empty result", "")
             return
@@ -805,6 +1168,103 @@ class SmartTranslatorApp(rumps.App):
         if profile == "token_saver_safe":
             return self.safe_token_saver_cleanup(text)
         return text
+
+    def run_gemini_use_case(self, use_case, text):
+        profile = use_case.get("profile")
+        if profile == "token_saver_aggressive":
+            return self.run_gemini_token_saver(text, use_case)
+
+        prompt = use_case["prompt"].format(text=text)
+        return self.generate_with_gemini(prompt)
+
+    def run_gemini_token_saver(self, text, use_case):
+        safe_result = self.safe_token_saver_cleanup(text)
+        prompt = use_case["prompt"].format(text=safe_result)
+
+        try:
+            result = self.generate_with_gemini(prompt)
+        except Exception as exc:
+            logging.warning(f"Gemini token saver fallback triggered: {exc}")
+            rumps.notification(
+                "Gemini Fallback",
+                "Used safe token saver instead",
+                self.preview_text(str(exc), limit=96),
+            )
+            return safe_result
+
+        if not result:
+            rumps.notification("Gemini Fallback", "Used safe token saver instead", "Gemini returned an empty response")
+            return safe_result
+
+        return result
+
+    def generate_with_selected_provider(self, prompt):
+        if self.get_selected_provider() == "gemini":
+            return self.generate_with_gemini(prompt)
+        return self.client.generate(self.model, prompt)
+
+    def generate_with_gemini(self, prompt):
+        api_key = self.get_gemini_api_key()
+        model = self.get_gemini_model()
+        transport = self.get_gemini_transport()
+        errors = []
+
+        if transport in {"auto", "api"} and api_key:
+            try:
+                return self.gemini_client.generate(api_key, model, prompt)
+            except requests.HTTPError as exc:
+                errors.append(self.extract_http_error_message(exc))
+                if transport == "api":
+                    raise RuntimeError(errors[-1]) from exc
+            except requests.RequestException as exc:
+                errors.append("Gemini API request failed")
+                if transport == "api":
+                    raise RuntimeError(errors[-1]) from exc
+        elif transport == "api":
+            raise RuntimeError("Set GEMINI_API_KEY, GOOGLE_API_KEY, or configure a Gemini key in Settings")
+
+        if transport in {"auto", "playwright"}:
+            try:
+                return self.gemini_playwright_client.generate(
+                    prompt,
+                    self.get_playwright_profile_dir(),
+                    self.get_playwright_url(),
+                    self.get_playwright_timeout_sec(),
+                )
+            except Exception as exc:
+                errors.append(str(exc))
+                if transport == "playwright":
+                    raise RuntimeError(errors[-1]) from exc
+
+        if errors:
+            raise RuntimeError(" | ".join(errors))
+        raise RuntimeError("No Gemini transport is configured")
+
+    def get_gemini_api_key(self):
+        return (
+            os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or self.config.get("gemini", {}).get("api_key", "").strip()
+        )
+
+    def get_gemini_model(self):
+        return self.config.get("gemini", {}).get("model", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
+    def get_gemini_models(self):
+        models = self.config.get("gemini", {}).get("models", DEFAULT_GEMINI_MODELS)
+        if not isinstance(models, list):
+            return DEFAULT_GEMINI_MODELS
+        return [model for model in models if isinstance(model, str) and model.strip()]
+
+    def extract_http_error_message(self, error):
+        response = getattr(error, "response", None)
+        if response is None:
+            return "Gemini returned an HTTP error"
+        try:
+            payload = response.json()
+            return payload.get("error", {}).get("message") or f"Gemini HTTP {response.status_code}"
+        except Exception:
+            return f"Gemini HTTP {response.status_code}"
 
     def safe_token_saver_cleanup(self, text):
         normalized = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -885,6 +1345,13 @@ class SmartTranslatorApp(rumps.App):
             return f"{bullet_match.group(1)} {bullet_text}"
         return re.sub(r"\s+", " ", stripped)
 
+    def mask_secret(self, value):
+        if not value:
+            return ""
+        if len(value) <= 8:
+            return "*" * len(value)
+        return f"{value[:4]}...{value[-4:]}"
+
     def copy_result(self, source_text, result_text):
         pyperclip.copy(result_text)
         if not self.clipboard_history or self.clipboard_history[-1] != source_text:
@@ -929,6 +1396,93 @@ class SmartTranslatorApp(rumps.App):
         self.refresh_menu_state(force=True)
         self.reconnect_now(None)
         rumps.notification("Settings", "URL Updated", new_url)
+
+    def change_gemini_api_key(self, _):
+        current_key = self.config.get("gemini", {}).get("api_key", "")
+        window = rumps.Window(
+            message=(
+                "Set a Gemini API key for the Gemini provider and Token Saver (Aggressive).\n"
+                "Leave blank to use GEMINI_API_KEY or GOOGLE_API_KEY."
+            ),
+            title="Gemini API Key",
+            default_text=current_key,
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(420, 120),
+        )
+        result = window.run()
+        if not result.clicked:
+            return
+
+        self.config.setdefault("gemini", {})
+        self.config["gemini"]["api_key"] = result.text.strip()
+        self.save_config()
+
+        summary = (
+            "Using GEMINI_API_KEY / GOOGLE_API_KEY if set"
+            if not self.config["gemini"]["api_key"]
+            else self.mask_secret(self.config["gemini"]["api_key"])
+        )
+        rumps.notification("Settings", "Gemini key updated", summary)
+
+    def change_gemini_model(self, _):
+        window = rumps.Window(
+            message="Set the Gemini model used by the Gemini provider and Token Saver (Aggressive).",
+            title="Gemini Model",
+            default_text=self.get_gemini_model(),
+            ok="Save",
+            cancel="Cancel",
+        )
+        result = window.run()
+        if not result.clicked:
+            return
+
+        model_name = result.text.strip() or DEFAULT_GEMINI_MODEL
+        self.config.setdefault("gemini", {})
+        self.config["gemini"]["model"] = model_name
+        self.save_config()
+        rumps.notification("Settings", "Gemini model updated", model_name)
+
+    def change_gemini_transport(self, _):
+        window = rumps.Window(
+            message="Set Gemini transport: auto, api, or playwright.",
+            title="Gemini Transport",
+            default_text=self.get_gemini_transport(),
+            ok="Save",
+            cancel="Cancel",
+        )
+        result = window.run()
+        if not result.clicked:
+            return
+
+        transport = result.text.strip().lower() or "auto"
+        if transport not in {"auto", "api", "playwright"}:
+            rumps.notification("Settings", "Invalid Gemini transport", "Use auto, api, or playwright")
+            return
+
+        self.config.setdefault("gemini", {})
+        self.config["gemini"]["transport"] = transport
+        self.save_config()
+        rumps.notification("Settings", "Gemini transport updated", transport)
+
+    def change_playwright_profile_dir(self, _):
+        window = rumps.Window(
+            message="Set the persistent browser profile path used for Gemini Playwright login.",
+            title="Playwright Profile Path",
+            default_text=self.get_playwright_profile_dir(),
+            ok="Save",
+            cancel="Cancel",
+            dimensions=(460, 120),
+        )
+        result = window.run()
+        if not result.clicked:
+            return
+
+        profile_dir = result.text.strip() or "~/Library/Application Support/SmartTranslator/gemini-playwright-profile"
+        self.config.setdefault("gemini", {})
+        self.config["gemini"]["playwright_profile_dir"] = profile_dir
+        self.save_config()
+        rumps.notification("Settings", "Playwright profile updated", os.path.expanduser(profile_dir))
 
     def add_language(self, _):
         window = rumps.Window(
@@ -1011,13 +1565,14 @@ class SmartTranslatorApp(rumps.App):
             return
 
         skill_emoji = emoji_result.text.strip() or "⚡"
-        if not self.online or not self.model:
-            rumps.notification("Error", "Ollama not available", "Cannot generate a skill prompt while offline")
+        if not self.is_selected_provider_ready():
+            title, message = self.build_unavailable_message("selected_provider")
+            rumps.notification(title, "Prompt generation unavailable", message)
             return
 
         self.title = APP_TITLE_BUSY
         try:
-            refined_prompt = self.client.generate(self.model, self.build_skill_meta_prompt(user_description))
+            refined_prompt = self.generate_with_selected_provider(self.build_skill_meta_prompt(user_description))
             refined_prompt = self.normalize_generated_prompt(refined_prompt)
         except Exception as exc:
             logging.error(f"Prompt generation failed: {exc}")
