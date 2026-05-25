@@ -1,6 +1,8 @@
 # Smart Translator for macOS
 
-A privacy-focused macOS menu bar app that uses local LLMs (via [Ollama](https://ollama.com)) for instant text correction, translation, and **custom clipboard skills** — all from your clipboard.
+A macOS menu bar app for instant text correction, translation, and **custom clipboard skills** — powered by your choice of local LLMs via [Ollama](https://ollama.com) or the [Gemini API](https://ai.google.dev/).
+
+**v1.2.0** — dual-provider support (Ollama + Gemini), Gemini 2.5 models, provider switching from the menu bar.
 
 ## Screenshots
 
@@ -10,92 +12,109 @@ A privacy-focused macOS menu bar app that uses local LLMs (via [Ollama](https://
 
 ## Key Features
 
-- **Global Hotkey** — Press `Ctrl + Cmd + C` to instantly correct clipboard text.
-- **Custom Skills** — Define your own text processing actions (token saving, text cleanup, summarization, tone conversion, etc.). The local LLM turns your description into a stronger reusable prompt, then you validate before saving.
-- **Gemini Hybrid Token Saving** — `Token Saver (Aggressive)` can use the official Gemini API free tier or a Playwright-driven Gemini browser session, then falls back to the safe local cleaner if Gemini is unavailable.
-- **Translation** — Translate clipboard text to any language. Add/remove languages on the fly.
-- **Smart Correction** — Fix grammar, spelling, and clarity while preserving formatting.
-- **Faster Feeling UI** — A cleaner, shorter menu bar state, grouped menu sections, quicker reconnect flow, and reduced polling churn keep the app snappier.
-- **Async Processing** — Non-blocking background tasks and connection reuse keep the menu bar responsive.
-- **Clipboard History & Undo** — Up to 12 clipboard states with one-click undo back to the previous value.
-- **100% Local** — All processing stays on your machine. No data leaves your device.
-- **Dynamic Model Selection** — Switch between available Ollama models at runtime.
-- **Provider Switching** — Choose `Ollama` or `Gemini` from the menu, then run correction, translation, and prompt-based skills on that provider.
+- **Dual Provider** — Switch between **Ollama** (fully local, private) and **Gemini API** (cloud, faster) at any time from the menu bar.
+- **Gemini 2.5** — Ships with `gemini-2.5-flash-lite` as the default cloud model; `gemini-2.5-flash`, `gemini-2.5-pro`, and older models also available.
+- **Global Hotkey** — Press `Ctrl + Cmd + C` to instantly correct whatever text is selected on screen.
+- **Custom Skills** — Define your own clipboard processing actions. Describe what you want, the active LLM generates a refined prompt, you review it, then it's saved to the menu.
+- **Translation** — Translate clipboard text to any language. Add and remove target languages on the fly.
+- **Smart Correction** — Fix grammar, spelling, and clarity while preserving language and formatting.
+- **Token Saver** — Two built-in variants: a deterministic *safe* cleaner and an *aggressive* LLM-based compressor.
+- **Clipboard History & Undo** — Keeps up to 10 clipboard states; one-click undo restores the previous value.
+- **Async Processing** — All LLM calls run in background threads; the menu bar stays responsive throughout.
+- **Dynamic Model Selection** — Switch between Ollama models or Gemini models at runtime, or refresh the list from the API.
+
+## Providers
+
+### Ollama (local)
+Runs entirely on your machine. No data leaves your device.
+
+- Install Ollama: [ollama.com](https://ollama.com)
+- Pull a model:
+  ```bash
+  ollama pull llama3.2      # fast
+  ollama pull mistral       # higher quality
+  ```
+- The app defaults to `http://localhost:11434`; change it via **⚙️ Settings → Change Ollama URL**.
+
+### Gemini API
+Uses Google's Gemini REST API. Requires an API key.
+
+- Get a key at [aistudio.google.com](https://aistudio.google.com/apikey) (free tier available).
+- Set it via **⚙️ Settings → Change Gemini API Key**, or export it in your shell:
+  ```bash
+  export GEMINI_API_KEY=your_key_here
+  ```
+- Default model: `gemini-2.5-flash-lite`. Change via **⚙️ Settings → Change Gemini Model**.
+- **Transport options** (set via **Change Gemini Transport**):
+  - `api` — REST API only (recommended)
+  - `playwright` — browser-based fallback via a persistent Chromium session (requires `playwright install chromium`)
+  - `auto` — tries API first, falls back to Playwright
 
 ## Custom Skills
 
-The app goes beyond correction and translation. You can create any clipboard skill:
+1. Click **⚙️ Settings → Manage Skills → Add Skill...**
+2. **Describe** what you want the skill to do (e.g. "remove HTML tags and return clean text")
+3. The active LLM **generates a refined prompt** with strong output constraints
+4. **Review and edit** the prompt before saving
+5. Your skill appears in the main menu immediately
 
-1. Click **Settings > Manage Skills > Add Skill...**
-2. **Describe** what you want (e.g., "remove verbose filler words to save tokens", "strip HTML and clean up formatting")
-3. The local LLM **generates a refined prompt** from your description with stronger output constraints
-4. **Review and edit** the generated prompt before saving
-5. Your new skill appears in the main menu, ready to use
-
-Examples of custom use cases:
-- **Token Saver (Safe)** — Deterministically remove quoted replies, greetings, and empty clutter
-- **Token Saver (Aggressive)** — Run safe cleanup first, then use Gemini via API or Playwright to shorten prose while preserving technical detail
-- **HTML Cleaner** — Remove tags and extract clean text
-- **Bullet Summarizer** — Condense long text into bullet points
-- **Formal Rewriter** — Convert casual text to business tone
-
-## Prerequisites
-
-1. **macOS** (Apple Silicon or Intel)
-2. **Ollama** installed and running — [ollama.com](https://ollama.com)
-3. At least one local model pulled:
-   ```bash
-   ollama pull llama3.2   # Fast
-   ollama pull mistral    # Higher quality
-   ```
-4. Optional for Gemini Playwright fallback:
-   ```bash
-   python3 -m playwright install chromium
-   ```
+Built-in skills include Token Saver, Debug Helper, Error Condenser, Explain Code, Git Commit Message, JSON Cleaner, Log Extractor, and SQL from Error.
 
 ## Installation
 
-### Build as macOS App (recommended)
+### Build as a macOS App (recommended)
 
 ```bash
+pip install rumps requests pyperclip py2app pynput
 chmod +x build_script.sh
 ./build_script.sh
 ```
 
-Grant **Accessibility** and **Notifications** permissions when prompted.
+Grant **Accessibility** and **Notifications** permissions when prompted on first launch.
 
-### Run from Source
+### Run from source
 
 ```bash
-pip install rumps requests pyperclip py2app pynput playwright
+pip install rumps requests pyperclip pynput
 python3 smart_translator_dynamic.py
+```
+
+For Playwright fallback support, also run:
+```bash
+pip install playwright
+python3 -m playwright install chromium
 ```
 
 ## Usage
 
-1. **Copy** text to your clipboard
-2. Press `Ctrl + Cmd + C` for instant correction, or click the menu bar icon and choose an action
+1. **Copy** text to your clipboard (or just select text anywhere)
+2. Press **`Ctrl + Cmd + C`** for instant correction, or click the 🌍 menu bar icon and choose an action
 3. Wait for the **Success** notification
-4. **Paste** your processed text
+4. **Paste** the processed result
 
-To use Gemini for general actions, switch `Provider` to `Gemini` from the menu bar app, then set the Gemini transport and model in Settings if needed.
+To switch providers, open the menu bar icon and look for the **Provider** submenu (Ollama / Gemini).
 
 ## Configuration
 
-Config is stored at `~/Library/Application Support/SmartTranslator/config.json`.
+All config is stored at `~/Library/Application Support/SmartTranslator/config.json`.
 
-- **Ollama URL** — Connect to a remote Ollama instance via Settings
-- **Gemini API Key** — Optional for `Token Saver (Aggressive)`. Set `GEMINI_API_KEY` or `GOOGLE_API_KEY`, or store a key in Settings for local use.
-- **Gemini Model** — Defaults to `gemini-2.5-flash-lite`, which currently has an official free tier.
-- **Gemini Transport** — Choose `auto`, `api`, or `playwright` from Settings.
-- **Playwright Profile Path** — Persistent browser profile used to stay signed in to Gemini on the web.
-- **Prompts** — Edit correction/translation prompt templates in the config file
-- **Languages** — Add/remove via Settings > Manage Languages
-- **Skills** — Add/remove via Settings > Manage Skills
-- **Logs** — View at Settings > Open Logs (`~/Library/Logs/SmartTranslator/`)
+| Setting | Where to change |
+|---|---|
+| Ollama URL | ⚙️ Settings → Change Ollama URL |
+| Gemini API key | ⚙️ Settings → Change Gemini API Key |
+| Gemini model | ⚙️ Settings → Change Gemini Model |
+| Gemini transport (`api`/`playwright`/`auto`) | ⚙️ Settings → Change Gemini Transport |
+| Languages | ⚙️ Settings → Manage Languages |
+| Skills | ⚙️ Settings → Manage Skills |
+| Raw config | ⚙️ Settings → Edit Config File |
+| Logs | ⚙️ Settings → Open Logs (`~/Library/Logs/SmartTranslator/`) |
 
 ## Troubleshooting
 
-- **Hotkey not working** — Add the app to *System Settings > Privacy & Security > Accessibility*
-- **"Offline" status** — Verify Ollama is running (`ollama serve`)
-- **UI issues** — Check logs via Settings > Open Logs
+| Problem | Fix |
+|---|---|
+| Hotkey not working | Add the app to *System Settings → Privacy & Security → Accessibility* |
+| `❌ Offline` with Ollama | Run `ollama serve` in a terminal |
+| `❌ Offline` with Gemini | Check your API key and internet connection |
+| Playwright not found | Run `pip install playwright && python3 -m playwright install chromium` |
+| UI issues | Check logs via ⚙️ Settings → Open Logs |
