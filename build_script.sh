@@ -1,52 +1,57 @@
 #!/bin/bash
 
 # Build and Install Smart Translator App
-# Run this script to build the app and install it to Applications
+# Requires Apple Silicon (arm64) Python via Homebrew.
+# On first run it creates .venv-arm64 and installs dependencies automatically.
 
-echo "🔨 Building Smart Translator app..."
+set -e
 
-# Clean previous builds
+VENV=".venv-arm64"
+ARM64_PYTHON="/opt/homebrew/bin/python3"
+
+echo "🔨 Building Smart Translator app (arm64)..."
+
+# ── 1. Ensure the arm64 venv exists ──────────────────────────────────────────
+if [ ! -f "$VENV/bin/python" ]; then
+    if [ ! -x "$ARM64_PYTHON" ]; then
+        echo "❌ Homebrew Python not found at $ARM64_PYTHON"
+        echo "   Install it with: brew install python3"
+        exit 1
+    fi
+    echo "📦 Creating arm64 virtual environment..."
+    "$ARM64_PYTHON" -m venv "$VENV"
+    echo "📦 Installing dependencies..."
+    "$VENV/bin/pip" install --quiet rumps requests pyperclip pynput py2app
+    echo "✅ Dependencies installed."
+fi
+
+# ── 2. Build ──────────────────────────────────────────────────────────────────
 rm -rf build dist
+"$VENV/bin/python" setup.py py2app
 
-# Build the app
-python3 setup.py py2app
+echo "✅ Build successful!"
 
-if [ $? -eq 0 ]; then
-    echo "✅ Build successful!"
-    
-    # Install to Applications folder
-    echo "📦 Installing to Applications folder..."
-    
-    # Remove old version if exists
-    if [ -d "/Applications/Smart Translator.app" ]; then
-        echo "🗑️  Removing old version..."
-        rm -rf "/Applications/Smart Translator.app"
-    fi
-    
-    # Copy new version
-    cp -R "dist/SmartTranslator.app" "/Applications/Smart Translator.app"
-    
-    if [ $? -eq 0 ]; then
-        echo "🎉 Installation complete!"
-        echo "📍 Smart Translator installed to /Applications/Smart Translator.app"
-        echo ""
-        echo "⚠️  IMPORTANT: First launch instructions:"
-        echo "1. Open System Preferences > Security & Privacy > Privacy"
-        echo "2. Add Smart Translator to 'Accessibility' (for clipboard access)"
-        echo "3. Add Smart Translator to 'Notifications' (for notifications)"
-        echo "4. Launch the app from Applications folder"
-        echo ""
-        echo "🚀 You can now launch Smart Translator!"
-        
-        # Optionally launch the app
-        read -p "Launch Smart Translator now? (y/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            open "/Applications/Smart Translator.app"
-        fi
-    else
-        echo "❌ Installation failed. Please check permissions."
-    fi
-else
-    echo "❌ Build failed. Please check for errors above."
+# ── 3. Verify architecture ────────────────────────────────────────────────────
+ARCH=$(file dist/SmartTranslator.app/Contents/MacOS/SmartTranslator | grep -o 'arm64\|x86_64\|universal')
+echo "🏗  Binary architecture: $ARCH"
+
+# ── 4. Install to /Applications ───────────────────────────────────────────────
+echo "📦 Installing to /Applications..."
+if [ -d "/Applications/Smart Translator.app" ]; then
+    echo "🗑️  Removing old version..."
+    rm -rf "/Applications/Smart Translator.app"
+fi
+cp -R "dist/SmartTranslator.app" "/Applications/Smart Translator.app"
+
+echo "🎉 Installed: /Applications/Smart Translator.app"
+echo ""
+echo "⚠️  First launch — grant these permissions when prompted:"
+echo "   • Accessibility  (System Settings → Privacy & Security → Accessibility)"
+echo "   • Notifications"
+echo ""
+
+read -p "Launch Smart Translator now? (y/n): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    open "/Applications/Smart Translator.app"
 fi

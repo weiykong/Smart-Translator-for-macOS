@@ -1,5 +1,6 @@
 build/
 dist/
+.venv-arm64/
 __pycache__/
 *.pyc
 .DS_Store
