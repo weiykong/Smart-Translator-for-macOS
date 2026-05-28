@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from collections import deque
 from datetime import datetime
 
@@ -927,10 +928,11 @@ class SmartTranslatorApp(rumps.App):
 
             def task():
                 try:
-                    with kb_controller.pressed(keyboard.Key.cmd):
-                        kb_controller.tap("c")
-
-                    threading.Event().wait(0.15)
+                    changed = self.copy_selection_and_wait(kb_controller)
+                    if not changed:
+                        logging.warning("Clipboard did not change after Cmd+C — nothing selected?")
+                        rumps.notification("Smart Translator", "Nothing selected", "Select some text, then try again")
+                        return
                     self.process_task("correct")
                 finally:
                     self.finish_processing()
@@ -948,6 +950,35 @@ class SmartTranslatorApp(rumps.App):
                     logging.warning("Accessibility permissions missing for hotkey listener")
 
         threading.Thread(target=listener_thread, daemon=True).start()
+
+    def copy_selection_and_wait(self, kb_controller, timeout=2.0):
+        """Simulate Cmd+C and wait until NSPasteboard.changeCount actually ticks.
+
+        Returns True if the clipboard changed within *timeout* seconds,
+        False if the timeout elapsed (nothing was selected / copy failed).
+        Falls back to a plain 0.4 s sleep when AppKit is unavailable.
+        """
+        try:
+            import AppKit
+            pb = AppKit.NSPasteboard.generalPasteboard()
+            baseline = pb.changeCount()
+
+            with kb_controller.pressed(keyboard.Key.cmd):
+                kb_controller.tap("c")
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if pb.changeCount() != baseline:
+                    return True
+                time.sleep(0.05)      # poll every 50 ms
+            return False
+
+        except Exception as exc:
+            logging.warning(f"copy_selection_and_wait AppKit fallback: {exc}")
+            with kb_controller.pressed(keyboard.Key.cmd):
+                kb_controller.tap("c")
+            time.sleep(0.4)
+            return True
 
     def begin_processing(self):
         with self.state_lock:
