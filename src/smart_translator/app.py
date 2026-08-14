@@ -6,12 +6,28 @@ import subprocess
 import threading
 from collections import deque
 from datetime import datetime
+from typing import Optional, List, Dict, Any
+
+try:
+    import rumps
+except ImportError:
+    rumps = None  # Allow testing without macOS-specific dependencies
 
 import pyperclip
 import requests
-import rumps
-from pynput import keyboard
 from requests.adapters import HTTPAdapter
+
+# Lazy import pynput for keyboard handling
+_keyboard = None
+def _get_keyboard():
+    global _keyboard
+    if _keyboard is None:
+        try:
+            from pynput import keyboard
+            _keyboard = keyboard
+        except (ImportError, Exception):
+            _keyboard = None  # Allow testing without GUI
+    return _keyboard
 
 # Setup Logging
 LOG_DIR = os.path.expanduser("~/Library/Logs/SmartTranslator")
@@ -284,9 +300,13 @@ class OllamaClient:
             raise
 
 
-class SmartTranslatorApp(rumps.App):
-    def __init__(self):
-        super().__init__(APP_TITLE_ONLINE, quit_button=None)
+# Only define the app class when rumps is available (macOS)
+if rumps is not None:
+    class SmartTranslatorApp(rumps.App):
+        """Main application class for Smart Translator."""
+        
+        def __init__(self):
+            super().__init__(APP_TITLE_ONLINE, quit_button=None)
         self.clipboard_history = deque(maxlen=12)
         self.is_processing = False
         self.state_lock = threading.Lock()
@@ -621,7 +641,12 @@ class SmartTranslatorApp(rumps.App):
 
     def start_hotkey_listener(self):
         """Starts a background thread to listen for global hotkeys."""
-        kb_controller = keyboard.Controller()
+        keyboard_module = _get_keyboard()
+        if keyboard_module is None:
+            logging.warning("Keyboard module not available, hotkey listener disabled")
+            return
+            
+        kb_controller = keyboard_module.Controller()
 
         def on_hotkey():
             if not self.online or not self.model:
@@ -633,7 +658,7 @@ class SmartTranslatorApp(rumps.App):
 
             def task():
                 try:
-                    with kb_controller.pressed(keyboard.Key.cmd):
+                    with kb_controller.pressed(keyboard_module.Key.cmd):
                         kb_controller.tap("c")
 
                     threading.Event().wait(0.15)
@@ -645,7 +670,7 @@ class SmartTranslatorApp(rumps.App):
 
         def listener_thread():
             try:
-                with keyboard.GlobalHotKeys({"<ctrl>+<cmd>+c": on_hotkey}) as hotkeys:
+                with keyboard_module.GlobalHotKeys({"<ctrl>+<cmd>+c": on_hotkey}) as hotkeys:
                     logging.info("Hotkey listener started for <ctrl>+<cmd>+c")
                     hotkeys.join()
             except Exception as exc:
